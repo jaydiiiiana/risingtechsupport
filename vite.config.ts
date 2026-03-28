@@ -6,10 +6,9 @@ export default defineConfig({
   plugins: [react()],
   server: {
     proxy: {
-      '/api/resend': {
-        target: 'https://api.resend.com',
+      '/api/send-email': {
+        target: 'http://localhost:3000',
         changeOrigin: true,
-        rewrite: (path) => path.replace(/^\/api\/resend/, ''),
       },
     },
   },

@@ -16,7 +16,7 @@ import {
 import { motion, AnimatePresence } from 'framer-motion';
 import { reports, type TroubleshootingReport } from './data/reports';
 
-const RESEND_API_KEY = import.meta.env.VITE_RESEND_API_KEY;
+// RESEND_API_KEY has been moved to the serverless backend for security.
 
 const App: React.FC = () => {
   const [activeTab, setActiveTab] = useState('sender');
@@ -50,31 +50,21 @@ const App: React.FC = () => {
     
     const reportToUse = customReport || selectedReport;
 
-    const emailBody = `
-      <div style="font-family: sans-serif; padding: 20px; color: #1e293b;">
-        <h2 style="color: #3b82f6;">Rising Tech Troubleshooting Report</h2>
-        <p><strong>Complainant:</strong> ${complainantName}</p>
-        <p><strong>Problem:</strong> ${reportToUse.problem}</p>
-        <p><strong>Description:</strong> ${reportToUse.description || 'No additional description provided.'}</p>
-        <hr />
-        <p><strong>Possible Error:</strong> ${reportToUse.possibleError}</p>
-        <p><strong>Suggested Solution:</strong> ${reportToUse.suggestedSolution}</p>
-        <p><strong>Resolution Frequency:</strong> ${reportToUse.frequency}</p>
-      </div>
-    `;
-
     try {
-      const response = await fetch('/api/resend/emails', {
+      const response = await fetch('/api/send-email', {
         method: 'POST',
         headers: {
-          'Authorization': `Bearer ${RESEND_API_KEY}`,
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          from: 'Rising Tech <onboarding@resend.dev>',
-          to: [targetEmail],
           subject: subject,
-          html: emailBody,
+          complainant_name: complainantName,
+          complainant_email: targetEmail,
+          problem: reportToUse.problem,
+          description: reportToUse.description || 'No additional description provided.',
+          possible_error: reportToUse.possibleError,
+          suggested_solution: reportToUse.suggestedSolution,
+          frequency: reportToUse.frequency,
         }),
       });
 
