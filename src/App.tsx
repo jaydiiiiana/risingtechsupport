@@ -50,9 +50,10 @@ const App: React.FC = () => {
     
     const reportToUse = customReport || selectedReport;
     const params = {
-      subject: subject,
-      complainant_name: complainantName,
-      complainant_email: targetEmail,
+      subject: subject.trim(),
+      complainant_name: complainantName.trim(),
+      complainant_email: targetEmail.trim(),
+      to_email: targetEmail.trim(), // Duplicate for standard templates
       problem: reportToUse.problem,
       description: reportToUse.description || 'No additional description provided.',
       possible_error: reportToUse.possibleError,
@@ -70,9 +71,8 @@ const App: React.FC = () => {
       // Handle cases where the proxy fails (e.g. local dev without 'vercel dev')
       const contentType = response.headers.get("content-type");
       if (!response.ok || (contentType && !contentType.includes("application/json"))) {
-        console.log('Backend not available, falling back to direct EmailJS call...');
+        console.warn('Backend not available, trying direct EmailJS fallback...');
         
-        // Direct Browser-to-EmailJS Fallback
         response = await fetch('https://api.emailjs.com/api/v1.0/email/send', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -85,9 +85,17 @@ const App: React.FC = () => {
         });
       }
 
+      const finalContentType = response.headers.get("content-type");
+      let errorData;
+      
       if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.message || errorData.text || 'EmailJS Transmission Error');
+        // Safe JSON parsing
+        if (finalContentType && finalContentType.includes("application/json")) {
+          errorData = await response.json();
+        } else {
+          errorData = { message: `HTTP ${response.status}: ${await response.text().then(t => t.substring(0, 50))}...` };
+        }
+        throw new Error(errorData.message || errorData.text || 'Email Transmission Error');
       }
 
       setIsSending(false);
@@ -96,7 +104,7 @@ const App: React.FC = () => {
     } catch (error: any) {
       console.error('Email Dispatch Error:', error);
       setIsSending(false);
-      setErrorStatus(error.message || 'Failed to dispatch report. Ensure your API keys are correct.');
+      setErrorStatus(error.message || 'Failed to dispatch report. Check your EmailJS keys.');
       setTimeout(() => setErrorStatus(null), 10000);
     }
   };
