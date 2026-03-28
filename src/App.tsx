@@ -85,17 +85,19 @@ const App: React.FC = () => {
         });
       }
 
-      const finalContentType = response.headers.get("content-type");
+      let resultText = await response.text();
       let errorData;
       
       if (!response.ok) {
-        // Safe JSON parsing
-        if (finalContentType && finalContentType.includes("application/json")) {
-          errorData = await response.json();
-        } else {
-          errorData = { message: `HTTP ${response.status}: ${await response.text().then(t => t.substring(0, 50))}...` };
+        try {
+          // Attempt to parse text as JSON
+          const json = JSON.parse(resultText);
+          errorData = { message: json.message || json.text || 'Email Transmission Error' };
+        } catch (e) {
+          // Fallback to text snippet if JSON parse fails
+          errorData = { message: `Server Error (${response.status}): ${resultText.substring(0, 60)}...` };
         }
-        throw new Error(errorData.message || errorData.text || 'Email Transmission Error');
+        throw new Error(errorData.message);
       }
 
       setIsSending(false);
@@ -104,7 +106,13 @@ const App: React.FC = () => {
     } catch (error: any) {
       console.error('Email Dispatch Error:', error);
       setIsSending(false);
-      setErrorStatus(error.message || 'Failed to dispatch report. Check your EmailJS keys.');
+      
+      // If the error message is just the JSON parse error, provide a clearer one
+      const displayMessage = error.message.includes('Unexpected token') 
+        ? 'Failed to connect to the email service. Check your internet or API keys.' 
+        : error.message;
+
+      setErrorStatus(displayMessage || 'Failed to dispatch report.');
       setTimeout(() => setErrorStatus(null), 10000);
     }
   };
