@@ -1,5 +1,8 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import emailjs from '@emailjs/nodejs';
+import dotenv from 'dotenv';
+
+dotenv.config();
 
 export default async function handler(
   request: VercelRequest,
@@ -12,14 +15,14 @@ export default async function handler(
   // Get parameters from frontend
   const templateParams = request.body;
 
-  const SERVICE_ID = process.env.EMAILJS_SERVICE_ID;
-  const TEMPLATE_ID = process.env.EMAILJS_TEMPLATE_ID;
-  const PUBLIC_KEY = process.env.EMAILJS_PUBLIC_KEY;
-  const PRIVATE_KEY = process.env.EMAILJS_PRIVATE_KEY;
+  const SERVICE_ID = process.env.VITE_EMAILJS_SERVICE_ID;
+  const TEMPLATE_ID = process.env.VITE_EMAILJS_TEMPLATE_ID;
+  const PUBLIC_KEY = process.env.VITE_EMAILJS_PUBLIC_KEY;
+  const PRIVATE_KEY = process.env.VITE_EMAILJS_PRIVATE_KEY;
 
   if (!SERVICE_ID || !TEMPLATE_ID || !PUBLIC_KEY || !PRIVATE_KEY) {
     return response.status(500).json({ 
-      message: 'EmailJS Configuration missing on server. Check your Environment Variables.' 
+      message: 'EmailJS Configuration missing on server. Please add VITE_EMAILJS_... keys to Vercel.' 
     });
   }
 

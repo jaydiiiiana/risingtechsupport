@@ -49,43 +49,54 @@ const App: React.FC = () => {
     setErrorStatus(null);
     
     const reportToUse = customReport || selectedReport;
+    const params = {
+      subject: subject,
+      complainant_name: complainantName,
+      complainant_email: targetEmail,
+      problem: reportToUse.problem,
+      description: reportToUse.description || 'No additional description provided.',
+      possible_error: reportToUse.possibleError,
+      suggested_solution: reportToUse.suggestedSolution,
+      frequency: reportToUse.frequency,
+    };
 
     try {
-      const response = await fetch('/api/send-email', {
+      let response = await fetch('/api/send-email', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          subject: subject,
-          complainant_name: complainantName,
-          complainant_email: targetEmail,
-          problem: reportToUse.problem,
-          description: reportToUse.description || 'No additional description provided.',
-          possible_error: reportToUse.possibleError,
-          suggested_solution: reportToUse.suggestedSolution,
-          frequency: reportToUse.frequency,
-        }),
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(params),
       });
+
+      // Handle cases where the proxy fails (e.g. local dev without 'vercel dev')
+      const contentType = response.headers.get("content-type");
+      if (!response.ok || (contentType && !contentType.includes("application/json"))) {
+        console.log('Backend not available, falling back to direct EmailJS call...');
+        
+        // Direct Browser-to-EmailJS Fallback
+        response = await fetch('https://api.emailjs.com/api/v1.0/email/send', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            service_id: import.meta.env.VITE_EMAILJS_SERVICE_ID,
+            template_id: import.meta.env.VITE_EMAILJS_TEMPLATE_ID,
+            user_id: import.meta.env.VITE_EMAILJS_PUBLIC_KEY,
+            template_params: params
+          }),
+        });
+      }
 
       if (!response.ok) {
         const errorData = await response.json();
-        throw new Error(errorData.message || 'Resend API Error');
+        throw new Error(errorData.message || errorData.text || 'EmailJS Transmission Error');
       }
 
       setIsSending(false);
       setIsSent(true);
       setTimeout(() => setIsSent(false), 3000);
     } catch (error: any) {
-      console.error('Resend Error:', error);
+      console.error('Email Dispatch Error:', error);
       setIsSending(false);
-      
-      let friendlyMessage = error.message;
-      if (error.message.includes('own email address')) {
-        friendlyMessage = `Resend Sandbox Restriction: You can currently only send emails to your registered Resend email (jaydiiii331@gmail.com). To send to others, you must verify your domain at resend.com/domains.`;
-      }
-      
-      setErrorStatus(friendlyMessage || 'Failed to connect to Resend. Ensure "npm run dev" is active.');
+      setErrorStatus(error.message || 'Failed to dispatch report. Ensure your API keys are correct.');
       setTimeout(() => setErrorStatus(null), 10000);
     }
   };
