@@ -6,15 +6,7 @@ const supabase = createClient(
   'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImtjZ3N6ZXh1d2d4cXd3Zm5teXFkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzQ5Mzk1NjIsImV4cCI6MjA5MDUxNTU2Mn0.iCAE1riSUS6Rw3i8-tjVtUi3MCJSiz1nt_jLr3b-cvw'
 );
 
-// ⚠️ CHANGE THIS per project:
-// E-Booking = 'ext-1'
-// Tech Support = 'ext-2'
-// EatsGo = 'ext-3'
-// Educat = 'ext-4'
-// Brgy 145 = 'ext-5'
-const SYSTEM_ID = 'ext-2';
-
-export default function MaintenanceGuard({ children }: { children: any }) {
+export function MaintenanceGuard({ children, systemId }: { children: any, systemId: string }) {
   const [isLocked, setIsLocked] = useState(false);
   const [loading, setLoading] = useState(true);
 
@@ -24,7 +16,7 @@ export default function MaintenanceGuard({ children }: { children: any }) {
       const { data } = await supabase
         .from('system_status')
         .select('is_locked')
-        .eq('id', SYSTEM_ID)
+        .eq('id', systemId)
         .single();
       if (data) setIsLocked(data.is_locked);
       setLoading(false);
@@ -39,14 +31,14 @@ export default function MaintenanceGuard({ children }: { children: any }) {
         event: 'UPDATE',
         schema: 'public',
         table: 'system_status',
-        filter: `id=eq.${SYSTEM_ID}`
+        filter: `id=eq.${systemId}`
       }, (payload: any) => {
         setIsLocked(payload.new.is_locked);
       })
       .subscribe();
 
     return () => { supabase.removeChannel(channel); };
-  }, []);
+  }, [systemId]);
 
   if (loading) return null;
 
