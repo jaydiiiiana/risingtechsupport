@@ -191,16 +191,43 @@ Respond ONLY with the JSON object, no markdown, no code blocks, no explanation.`
     setErrorStatus(null);
     
     const reportToUse = customReport || selectedReport;
-    
-    // In a real production app with Vite, SMTP usually requires a backend.
-    // Since we are adding Nodemailer, we will simulate the dispatch here.
-    // For a local-only or serverless environment, this would call a /api/send endpoint.
-    
+    const emailData = {
+      service_id: import.meta.env.VITE_EMAILJS_SERVICE_ID,
+      template_id: import.meta.env.VITE_EMAILJS_TEMPLATE_ID,
+      user_id: import.meta.env.VITE_EMAILJS_PUBLIC_KEY,
+      template_params: {
+        subject: subject.trim(),
+        complainant_name: complainantName.trim(),
+        complainant_email: targetEmail.trim(),
+        to_email: targetEmail.trim(),
+        problem: reportToUse.problem,
+        description: reportToUse.description || 'No additional description provided.',
+        possible_error: reportToUse.possibleError,
+        suggested_solution: reportToUse.suggestedSolution,
+        frequency: reportToUse.frequency,
+        estimated_cost: reportToUse.estimatedCost || 'N/A',
+      }
+    };
+
     try {
-      console.log('Sending SMTP Email via:', import.meta.env.VITE_SMTP_EMAIL);
-      
-      // Simulate network delay for SMTP
-      await new Promise(resolve => setTimeout(resolve, 1500));
+      const response = await fetch('https://api.emailjs.com/api/v1.0/email/send', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(emailData),
+      });
+
+      const responseText = await response.text();
+
+      if (!response.ok) {
+        let errorMessage = `Server Error (${response.status})`;
+        try {
+          const errorJson = JSON.parse(responseText);
+          errorMessage = errorJson.text || errorJson.message || errorMessage;
+        } catch (e) {
+          errorMessage = responseText.substring(0, 100) || errorMessage;
+        }
+        throw new Error(errorMessage);
+      }
 
       const historyItem: SentHistoryItem = {
         id: `send-${Date.now()}`,
@@ -216,7 +243,7 @@ Respond ONLY with the JSON object, no markdown, no code blocks, no explanation.`
       setIsSent(true);
       setTimeout(() => setIsSent(false), 3000);
     } catch (error: any) {
-      console.error('SMTP Dispatch Error:', error);
+      console.error('Dispatch Error:', error);
       
       const historyItem: SentHistoryItem = {
         id: `send-${Date.now()}`,
@@ -230,7 +257,7 @@ Respond ONLY with the JSON object, no markdown, no code blocks, no explanation.`
       setSentHistory(prev => [historyItem, ...prev]);
 
       setIsSending(false);
-      setErrorStatus(error.message || 'Failed to send via SMTP. Please check credentials.');
+      setErrorStatus(error.message || 'Failed to send report. Please check your keys.');
       setTimeout(() => setErrorStatus(null), 10000);
     }
   };
@@ -649,7 +676,12 @@ Respond ONLY with the JSON object, no markdown, no code blocks, no explanation.`
                <div style={{ padding: '2rem', textAlign: 'center', background: 'rgba(16, 185, 129, 0.1)', borderRadius: '12px', border: '1px solid rgba(16, 185, 129, 0.2)' }}>
                  <CheckCircle size={40} style={{ color: '#10b981', margin: '0 auto 1rem' }} />
                  <h4 style={{ color: '#10b981', marginBottom: '0.5rem', fontSize: '1.1rem' }}>Complaint Received!</h4>
-                 <p style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>Our AI is analyzing your issue. You will receive an automated diagnostic report shortly.</p>
+                 <p style={{ color: 'var(--text-secondary)', fontSize: '0.9rem', lineHeight: '1.5' }}>
+                   Our AI is analyzing your issue. You will receive an automated diagnostic report shortly.<br/>
+                   <span style={{ fontSize: '0.8rem', opacity: 0.8, marginTop: '8px', display: 'block' }}>
+                     (If you don't see it in your inbox, please check your spam folder)
+                   </span>
+                 </p>
                </div>
             ) : (
                <form onSubmit={(e) => {
