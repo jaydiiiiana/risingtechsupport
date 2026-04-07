@@ -10,6 +10,8 @@ CREATE TABLE IF NOT EXISTS public.client_complaints (
     email TEXT NOT NULL,
     address TEXT,
     problem TEXT NOT NULL,
+    type TEXT DEFAULT 'complaint' NOT NULL, -- 'complaint' or 'website'
+    category TEXT DEFAULT 'company' NOT NULL, -- 'student', 'organization', or 'company'
     status TEXT DEFAULT 'pending' NOT NULL CHECK (status IN ('pending', 'resolved', 'in-progress')),
     created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
 );

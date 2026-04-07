@@ -525,6 +525,11 @@ Respond ONLY with the STRICT JSON object, no markdown, no explanation.`;
                   <td>
                     <div style={{ fontWeight: 600 }}>{complaint.name}</div>
                     <div style={{ fontSize: '0.85rem', color: 'var(--accent-primary)' }}>{complaint.email}</div>
+                    <div style={{ fontSize: '0.75rem', marginTop: '4px', opacity: 0.8 }}>
+                      {complaint.category === 'student' ? '🎓 Student' : 
+                       complaint.category === 'organization' ? '🏛️ Organization' : 
+                       '🏢 Company'}
+                    </div>
                     {complaint.address && <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>Loc: {complaint.address}</div>}
                   </td>
                   <td>
@@ -536,7 +541,7 @@ Respond ONLY with the STRICT JSON object, no markdown, no explanation.`;
                 </tr>
               )) : (
                 <tr>
-                  <td colSpan={3} style={{ textAlign: 'center', padding: '2rem', color: 'var(--text-muted)' }}>No pending client complaints.</td>
+                  <td colSpan={4} style={{ textAlign: 'center', padding: '2rem', color: 'var(--text-muted)' }}>No pending client complaints.</td>
                 </tr>
               )}
             </tbody>
