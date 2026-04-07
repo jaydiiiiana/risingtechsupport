@@ -1,10 +1,10 @@
 import React, { useState, useCallback } from 'react';
-import { 
-  LayoutDashboard, 
-  FileText, 
-  Mail, 
-  Settings, 
-  HelpCircle, 
+import {
+  LayoutDashboard,
+  FileText,
+  Mail,
+  Settings,
+  HelpCircle,
   CheckCircle,
   Clock,
   MonitorOff,
@@ -23,8 +23,7 @@ import {
   Phone
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { reports, type TroubleshootingReport } from './data/reports';
-import { GoogleGenerativeAI } from '@google/generative-ai';
+import { type TroubleshootingReport } from './data/reports';
 import { createClient } from '@supabase/supabase-js';
 
 // Initialize Supabase Client
@@ -44,8 +43,8 @@ interface SentHistoryItem {
 
 const App: React.FC = () => {
   const [activeTab, setActiveTab] = useState('sender');
-  const [dynamicReports, setDynamicReports] = useState<TroubleshootingReport[]>(reports);
-  const [selectedReportId, setSelectedReportId] = useState(reports[0].id);
+  const [dynamicReports, setDynamicReports] = useState<TroubleshootingReport[]>([]);
+  const [selectedReportId, setSelectedReportId] = useState<string | null>(null);
   const [complainantName, setComplainantName] = useState('');
   const [complainantEmail, setComplainantEmail] = useState('ajohndarcy@gmail.com');
   const [subject, setSubject] = useState('Technical Troubleshooting Report - Rising Tech');
@@ -58,9 +57,83 @@ const App: React.FC = () => {
   const [authError, setAuthError] = useState<string | null>(null);
   const [showLogin, setShowLogin] = useState(false);
   const [clientComplaints, setClientComplaints] = useState<any[]>([]);
-  const [clientForm, setClientForm] = useState({ name: '', email: '', address: '', problem: '' });
+  const [clientForm, setClientForm] = useState({ name: '', email: '', address: '', problem: '', type: 'complaint' });
   const [complaintSubmitted, setComplaintSubmitted] = useState(false);
-  
+
+  // --- SUPABASE FETCH LOGIC ---
+  const fetchSupabaseData = useCallback(async () => {
+    try {
+      // 1. Fetch Complaints
+      const { data: complaints, error: cErr } = await supabase
+        .from('client_complaints')
+        .select('*')
+        .order('created_at', { ascending: false });
+      if (cErr) throw cErr;
+      if (complaints) {
+        setClientComplaints(complaints.map(c => ({
+          id: c.id,
+          timestamp: new Date(c.created_at).toLocaleString(),
+          name: c.name,
+          email: c.email,
+          address: c.address,
+          problem: c.problem,
+          type: c.type || 'complaint'
+        })));
+      }
+
+      // 2. Fetch Email Logs
+      const { data: logs, error: lErr } = await supabase
+        .from('email_logs')
+        .select('*')
+        .order('created_at', { ascending: false });
+      if (lErr) throw lErr;
+      if (logs) {
+        setSentHistory(logs.map(l => ({
+          id: l.id,
+          timestamp: new Date(l.created_at).toLocaleString(),
+          recipient: l.recipient_email,
+          complainantName: l.complainant_name,
+          problem: l.problem,
+          status: l.status as 'success' | 'error'
+        })));
+      }
+
+      // 3. Fetch Custom Reports
+      const { data: customReports, error: rErr } = await supabase
+        .from('reports')
+        .select('*')
+        .order('created_at', { ascending: false });
+      if (rErr) throw rErr;
+      if (customReports) {
+        const mappedReports = customReports.map(r => ({
+          id: r.id,
+          problem: r.problem,
+          description: r.description,
+          possibleError: r.possible_error,
+          suggestedSolution: r.suggested_solution,
+          frequency: r.frequency,
+          estimatedCost: r.estimated_cost,
+          icon: r.icon,
+          isCustom: true
+        }));
+        // Use ONLY live templates from Support (Supabase)
+        setDynamicReports(mappedReports);
+        if (mappedReports.length > 0 && !selectedReportId) {
+          setSelectedReportId(mappedReports[0].id);
+        }
+      }
+    } catch (err) {
+      console.error('Supabase Data Fetch Error:', err);
+    }
+  }, []);
+
+  React.useEffect(() => {
+    if (isLoggedIn) {
+      fetchSupabaseData();
+    }
+  }, [isLoggedIn, fetchSupabaseData]);
+  // ----------------------------
+
   // Modal State
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [newReport, setNewReport] = useState({
@@ -94,55 +167,77 @@ const App: React.FC = () => {
     setAiError(null);
 
     try {
-      const genAI = new GoogleGenerativeAI(apiKey);
-      
-      const prompt = `You are a professional IT support technician at a tech company called "Rising Tech Innovations". 
-Given this computer/tech problem: "${newReport.problem.trim()}"
+      const prompt = `You are an expert IT Solution Architect and Support Lead at "Rising Tech Innovations". 
+Analyze the input: "${newReport.problem.trim()}"
 
-Generate a professional troubleshooting report in STRICT JSON format with these fields:
-{
-  "description": "A 1-2 sentence professional description of the problem",
-  "possibleError": "A comma-separated list of 3-4 possible root causes",
-  "suggestedSolution": "A clear, step-by-step solution (2-4 steps) written as a single paragraph",
-  "frequency": "An estimated resolution success rate as a percentage like '85% (High)' or '92% (Very High)' or '78% (Moderate)'",
-  "estimatedCost": "An estimated range of repair out-of-pocket costs such as '$50 - $100' or 'Free / Covered by warranty'"
-}
+If this is a technical PROBLEM (e.g. "PC won't turn on", "Slow internet"):
+Generate a professional troubleshooting report with these JSON fields:
+- "description": A 1-2 sentence professional description of the fault.
+- "possibleError": A comma-separated list of 3-4 possible root causes.
+- "suggestedSolution": A step-by-step fix (2-4 steps) in a single paragraph.
+- "estimatedCost": Estimated repair cost in Philippine Pesos (e.g. ₱2,500 - ₱5,000).
 
-Respond ONLY with the JSON object, no markdown, no code blocks, no explanation.`;
+If this is a WEBSITE or SYSTEM PROJECT REQUEST (e.g. "I need an e-commerce site", "Build a dashboard"):
+Generate a professional project proposal with these JSON fields:
+- "description": A high-level description of the system you will build.
+- "possibleError": A list of key features included in the proposed system.
+- "suggestedSolution": A professional deployment/development roadmap in a single paragraph.
+- "estimatedCost": Estimated project budget in Philippine Pesos (e.g. ₱25,000 - ₱100,000+ depending on scope).
 
+Common Field Requirement:
+- "frequency": For tech help, use resolution success % (e.g. 85%). For websites, use estimated development time (e.g. 2-4 weeks).
+
+Respond ONLY with the STRICT JSON object, no markdown, no explanation.`;
+
+      // --- Direct REST API with model fallback ---
       const fallbackModels = [
-        'gemini-3.1-flash-lite',
-        'gemini-3-flash',
-        'gemini-2.5-flash-lite',
         'gemini-2.5-flash',
-        'gemini-1.5-flash'
+        'gemini-2.5-flash-lite',
+        'gemini-2.0-flash'
       ];
-      
+
       let text = '';
-      let lastError: any = null;
+      let lastErrorMsg = '';
 
       for (const modelName of fallbackModels) {
         try {
-          const model = genAI.getGenerativeModel({ model: modelName });
-          const result = await model.generateContent(prompt);
-          text = result.response.text().trim();
-          break; // Success! Break out of the loop
-        } catch (err: any) {
-          console.warn(`Model ${modelName} failed:`, err.message || err);
-          lastError = err;
-          
-          // If the error is an invalid API key, no model will work, so break immediately
-          if (err.message && err.message.includes('API_KEY')) {
+          console.log(`[AI] Attempting REST call with model: ${modelName}...`);
+          const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${apiKey}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              contents: [{ parts: [{ text: prompt }] }],
+              generationConfig: {
+                temperature: 0.7,
+                maxOutputTokens: 1024
+              }
+            })
+          });
+
+          if (!response.ok) {
+            const errorData = await response.json();
+            const msg = errorData.error?.message || `HTTP ${response.status}`;
+            console.warn(`[AI] Model ${modelName} failed: ${msg}`);
+            lastErrorMsg = msg;
+            continue; // Try next model
+          }
+
+          const data = await response.json();
+          text = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
+          if (text) {
+            console.log(`[AI] ✅ Successfully generated with: ${modelName}`);
             break;
           }
-          // Otherwise (like 429 quota exceeded), it will continue to the next model in the fallback array
+        } catch (err: any) {
+          console.warn(`[AI] Model ${modelName} network error:`, err.message);
+          lastErrorMsg = err.message;
         }
       }
 
       if (!text) {
-        throw lastError || new Error('All fallback models failed to generate content.');
+        throw new Error(lastErrorMsg || 'All models failed to generate content.');
       }
-      
+
       // Clean potential markdown code block wrapping
       const cleanJson = text.replace(/^```json\s*/i, '').replace(/^```\s*/i, '').replace(/\s*```$/i, '');
       const parsed = JSON.parse(cleanJson);
@@ -158,13 +253,13 @@ Respond ONLY with the JSON object, no markdown, no code blocks, no explanation.`
     } catch (err: any) {
       console.error('AI Generation failed:', err);
       let errorMessage = 'AI generation failed. You can fill the fields manually.';
-      
+
       if (err.message?.includes('API_KEY')) {
         errorMessage = 'Invalid API key. Please check your Gemini API key.';
       } else if (err.message?.includes('429') || err.message?.includes('quota') || err.message?.includes('Quota')) {
         errorMessage = 'API Quota Exceeded limit. Please wait a moment before trying again.';
       }
-      
+
       setAiError(errorMessage);
       setTimeout(() => setAiError(null), 8000);
     } finally {
@@ -172,7 +267,16 @@ Respond ONLY with the JSON object, no markdown, no code blocks, no explanation.`
     }
   }, [newReport.problem]);
 
-  const selectedReport = dynamicReports.find(r => r.id === selectedReportId) || dynamicReports[0];
+  const selectedReport = dynamicReports.find(r => r.id === selectedReportId) || (dynamicReports.length > 0 ? dynamicReports[0] : {
+    id: 'empty',
+    problem: 'Select or Create a Template',
+    description: 'No templates available yet.',
+    possibleError: 'N/A',
+    suggestedSolution: 'Create a new template to get started.',
+    frequency: '0%',
+    icon: 'Zap',
+    estimatedCost: '₱0'
+  });
 
   const handleLogin = (e: React.FormEvent) => {
     e.preventDefault();
@@ -195,11 +299,18 @@ Respond ONLY with the JSON object, no markdown, no code blocks, no explanation.`
   const handleSendEmail = async (targetEmail: string, customReport?: TroubleshootingReport) => {
     setIsSending(true);
     setErrorStatus(null);
-    
+
     const reportToUse = customReport || selectedReport;
+
+    // Choose template based on report content or manual override
+    // If it looks like a website request (or has 'website' in problem), use Website Template
+    const isWebsiteRequest = reportToUse.problem.toLowerCase().includes('website') || reportToUse.problem.toLowerCase().includes('development');
+
     const emailData = {
       service_id: import.meta.env.VITE_EMAILJS_SERVICE_ID,
-      template_id: import.meta.env.VITE_EMAILJS_TEMPLATE_ID,
+      template_id: isWebsiteRequest
+        ? import.meta.env.VITE_EMAILJS_WEBSITE_TEMPLATE_ID || import.meta.env.VITE_EMAILJS_TEMPLATE_ID
+        : import.meta.env.VITE_EMAILJS_TEMPLATE_ID,
       user_id: import.meta.env.VITE_EMAILJS_PUBLIC_KEY,
       template_params: {
         subject: subject.trim(),
@@ -261,7 +372,7 @@ Respond ONLY with the JSON object, no markdown, no code blocks, no explanation.`
       setTimeout(() => setIsSent(false), 3000);
     } catch (error: any) {
       console.error('Dispatch Error:', error);
-      
+
       const historyItem: SentHistoryItem = {
         id: `send-${Date.now()}`,
         timestamp: new Date().toLocaleString(),
@@ -291,7 +402,7 @@ Respond ONLY with the JSON object, no markdown, no code blocks, no explanation.`
       estimatedCost: newReport.estimatedCost,
       icon: 'Zap'
     };
-    
+
     setDynamicReports(prev => [...prev, report]);
     setSelectedReportId(id);
 
@@ -349,8 +460,8 @@ Respond ONLY with the JSON object, no markdown, no code blocks, no explanation.`
         <div className="card stat-card" style={{ borderLeftColor: '#10b981' }}>
           <div className="stat-label">Success Rate</div>
           <div className="stat-value">
-            {sentHistory.length > 0 
-              ? Math.round((sentHistory.filter(h => h.status === 'success').length / sentHistory.length) * 100) 
+            {sentHistory.length > 0
+              ? Math.round((sentHistory.filter(h => h.status === 'success').length / sentHistory.length) * 100)
               : 0}%
           </div>
         </div>
@@ -403,7 +514,8 @@ Respond ONLY with the JSON object, no markdown, no code blocks, no explanation.`
               <tr>
                 <th>Date</th>
                 <th>Client Details</th>
-                <th>Problem Description</th>
+                <th>Type</th>
+                <th>Description</th>
               </tr>
             </thead>
             <tbody>
@@ -414,6 +526,11 @@ Respond ONLY with the JSON object, no markdown, no code blocks, no explanation.`
                     <div style={{ fontWeight: 600 }}>{complaint.name}</div>
                     <div style={{ fontSize: '0.85rem', color: 'var(--accent-primary)' }}>{complaint.email}</div>
                     {complaint.address && <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>Loc: {complaint.address}</div>}
+                  </td>
+                  <td>
+                    <span className={`status-badge ${complaint.type === 'website' ? 'status-success' : 'status-pending'}`} style={{ fontSize: '0.75rem' }}>
+                      {complaint.type === 'website' ? 'Website Project' : 'Tech Support'}
+                    </span>
                   </td>
                   <td>{complaint.problem}</td>
                 </tr>
@@ -491,7 +608,7 @@ Respond ONLY with the JSON object, no markdown, no code blocks, no explanation.`
       <div className="card">
         <h3>System Connectivity</h3>
         <p style={{ color: 'var(--text-secondary)', marginBottom: '2rem' }}>Connection status for EmailJS Service.</p>
-        
+
         <div style={{ padding: '1.5rem', background: 'rgba(16, 185, 129, 0.05)', borderRadius: '12px', border: '1px solid rgba(16, 185, 129, 0.2)', display: 'flex', alignItems: 'center', gap: '1.5rem' }}>
           <div style={{ width: '40px', height: '40px', background: 'rgba(16, 185, 129, 0.1)', borderRadius: '50%', display: 'grid', placeItems: 'center' }}>
             <CheckCircle size={22} style={{ color: '#10b981' }} />
@@ -568,7 +685,7 @@ Respond ONLY with the JSON object, no markdown, no code blocks, no explanation.`
               <div style={{ fontSize: '0.85rem', color: '#1e293b', marginTop: '4px' }}><strong>To:</strong> {complainantEmail}</div>
             </div>
             <div className="preview-body">
-              <p style={{ color: '#334155', marginBottom: '1.2rem' }}><strong>Technical Troubleshooting Report</strong><br/><span style={{ fontSize: '0.85rem', color: '#64748b' }}>Issued for: {complainantName || '...'}</span></p>
+              <p style={{ color: '#334155', marginBottom: '1.2rem' }}><strong>Technical Troubleshooting Report</strong><br /><span style={{ fontSize: '0.85rem', color: '#64748b' }}>Issued for: {complainantName || '...'}</span></p>
               <div className="report-box">
                 <div className="report-field"><div className="field-label">Problem Status</div><div className="field-value" style={{ fontWeight: '600' }}>{selectedReport.problem}</div><div style={{ color: '#64748b', fontSize: '0.8rem' }}>{selectedReport.description}</div></div>
                 <div className="report-field"><div className="field-label">Possible Error Mapping</div><div className="field-value">{selectedReport.possibleError}</div></div>
@@ -611,36 +728,36 @@ Respond ONLY with the JSON object, no markdown, no code blocks, no explanation.`
           <div className="badge-pill">
             <Sparkles size={16} /> Powered by Next-Gen AI
           </div>
-          <h1>Rising Tech Innovation</h1>
-          <h2>Automated Technical Support Solutions</h2>
+          <h1>Rising Tech IT Solutions</h1>
+          <h2>Next-Gen Web & Support Ecosystems</h2>
           <p>
-            Experience lightning-fast complaint resolution. Our AI-driven system instantly diagnoses technical faults, predicts estimated costs, and generates professional troubleshooting reports to fix your problems effortlessly.
+            From custom high-performance websites to AI-driven troubleshooters, we build the digital infrastructure your business needs. Experience lightning-fast complaint resolution and professional web assets that scale with you.
           </p>
           <div className="hero-actions">
             <button className="btn-primary hero-btn" onClick={() => setShowLogin(true)} style={{ display: 'none' }}>
               Initialize Diagnostics <Zap size={18} />
             </button>
-            <button className="nav-item hero-btn-secondary" style={{ padding: '1.2rem 2.5rem', background: 'rgba(255,255,255,0.05)', color: 'white', borderRadius: '14px', border: '1px solid var(--glass-border)' }} onClick={() => document.getElementById('features')?.scrollIntoView({ behavior: 'smooth'})}>
+            <button className="nav-item hero-btn-secondary" style={{ padding: '1.2rem 2.5rem', background: 'rgba(255,255,255,0.05)', color: 'white', borderRadius: '14px', border: '1px solid var(--glass-border)' }} onClick={() => document.getElementById('features')?.scrollIntoView({ behavior: 'smooth' })}>
               Learn More
             </button>
           </div>
         </motion.div>
-        
+
         <motion.div initial={{ opacity: 0, scale: 0.9 }} animate={{ opacity: 1, scale: 1 }} transition={{ duration: 0.6, delay: 0.2 }} className="hero-visual">
           <div className="glass-card">
             <div className="mock-header">
-               <div className="dot red"></div><div className="dot yellow"></div><div className="dot green"></div>
+              <div className="dot red"></div><div className="dot yellow"></div><div className="dot green"></div>
             </div>
             <div className="mock-body">
-               <div className="mock-line" style={{ width: '60%' }}></div>
-               <div className="mock-line"></div>
-               <div className="mock-line" style={{ width: '80%' }}></div>
-               <div className="mock-box">
-                  <div className="ai-scanning">
-                    <Bot size={32} className="text-accent" />
-                    <span>AI Troubleshooting Sequence Initiated...</span>
-                  </div>
-               </div>
+              <div className="mock-line" style={{ width: '60%' }}></div>
+              <div className="mock-line"></div>
+              <div className="mock-line" style={{ width: '80%' }}></div>
+              <div className="mock-box">
+                <div className="ai-scanning">
+                  <Bot size={32} className="text-accent" />
+                  <span>AI Troubleshooting Sequence Initiated...</span>
+                </div>
+              </div>
             </div>
           </div>
         </motion.div>
@@ -651,7 +768,7 @@ Respond ONLY with the JSON object, no markdown, no code blocks, no explanation.`
           <h2 style={{ fontSize: '2.5rem', marginBottom: '1rem' }}>Intelligent Support Matrix</h2>
           <p style={{ color: 'var(--text-secondary)', maxWidth: '600px', margin: '0 auto' }}>Rising Tech Innovations leverages cloud AI to reduce technical downtime from days to seconds.</p>
         </div>
-        
+
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: '2rem', maxWidth: '1200px', margin: '0 auto' }}>
           <motion.div initial={{ opacity: 0, y: 20 }} whileInView={{ opacity: 1, y: 0 }} viewport={{ once: true }} className="feature-card glass-card" style={{ padding: '2.5rem', transform: 'none' }}>
             <div className="report-icon-box" style={{ marginBottom: '1.5rem', background: 'rgba(59, 130, 246, 0.1)', color: '#3b82f6' }}><Bot size={28} /></div>
@@ -666,9 +783,9 @@ Respond ONLY with the JSON object, no markdown, no code blocks, no explanation.`
           </motion.div>
 
           <motion.div initial={{ opacity: 0, y: 20 }} whileInView={{ opacity: 1, y: 0 }} viewport={{ once: true }} transition={{ delay: 0.2 }} className="feature-card glass-card" style={{ padding: '2.5rem', transform: 'none' }}>
-            <div className="report-icon-box" style={{ marginBottom: '1.5rem', background: 'rgba(139, 92, 246, 0.1)', color: '#8b5cf6' }}><Mail size={28} /></div>
-            <h3 style={{ fontSize: '1.25rem', marginBottom: '1rem' }}>1-Click Report Dispatch</h3>
-            <p style={{ color: 'var(--text-muted)', lineHeight: '1.6', fontSize: '0.95rem' }}>Generate a professional PDF-style email blueprint seamlessly connecting the user to exactly how to resolve the problem autonomously.</p>
+            <div className="report-icon-box" style={{ marginBottom: '1.5rem', background: 'rgba(139, 92, 246, 0.1)', color: '#8b5cf6' }}><Sparkles size={28} /></div>
+            <h3 style={{ fontSize: '1.25rem', marginBottom: '1rem' }}>Premium Web Development</h3>
+            <p style={{ color: 'var(--text-muted)', lineHeight: '1.6', fontSize: '0.95rem' }}>We don't just fix tech; we build it. Our team specializes in high-conversion websites and custom internal tools integrated with our AI support hub.</p>
           </motion.div>
         </div>
       </div>
@@ -676,7 +793,7 @@ Respond ONLY with the JSON object, no markdown, no code blocks, no explanation.`
       {/* Footer / Client Portal */}
       <footer id="complaint-form" style={{ padding: '6rem 4rem', background: 'var(--bg-secondary)', borderTop: '1px solid var(--glass-border)' }}>
         <div style={{ maxWidth: '1200px', margin: '0 auto', display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: '4rem' }}>
-          
+
           <div>
             <div className="logo-section" style={{ marginBottom: '1.5rem' }}>
               <div className="logo-box">
@@ -690,11 +807,11 @@ Respond ONLY with the JSON object, no markdown, no code blocks, no explanation.`
             </p>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem', color: 'var(--text-secondary)' }}>
               <div style={{ display: 'flex', gap: '1rem', alignItems: 'flex-start' }}>
-                <MapPin size={20} style={{ flexShrink: 0, marginTop: '2px' }} /> 
-                <span style={{ fontSize: '0.95rem', lineHeight: '1.4' }}>Rising Tech Innovations HQ<br/>123 Silicon Boulevard, Tech District<br/>San Francisco, CA 94107</span>
+                <MapPin size={20} style={{ flexShrink: 0, marginTop: '2px' }} />
+                <span style={{ fontSize: '0.95rem', lineHeight: '1.4' }}>Rising Tech Innovations HQ<br />8# Alley 3 Palasan<br />Valenzuela City</span>
               </div>
               <div style={{ display: 'flex', gap: '1rem', alignItems: 'center' }}>
-                <Phone size={20} /> <span style={{ fontSize: '0.95rem' }}>+1 (800) 555-TECH</span>
+                <Phone size={20} /> <span style={{ fontSize: '0.95rem' }}>+63 994 301 8284</span>
               </div>
               <div style={{ display: 'flex', gap: '1rem', alignItems: 'center' }}>
                 <Mail size={20} /> <span style={{ fontSize: '0.95rem' }}>support@risingtech.innovation</span>
@@ -703,65 +820,72 @@ Respond ONLY with the JSON object, no markdown, no code blocks, no explanation.`
           </div>
 
           <div className="card glass-card" style={{ padding: '2.5rem', transform: 'none' }}>
-            <h3 style={{ marginBottom: '1.5rem', fontSize: '1.3rem' }}>File a Technical Complaint</h3>
+            <h3 style={{ marginBottom: '1.5rem', fontSize: '1.3rem' }}>Submit a Request to Rising Tech</h3>
             {complaintSubmitted ? (
-               <div style={{ padding: '2rem', textAlign: 'center', background: 'rgba(16, 185, 129, 0.1)', borderRadius: '12px', border: '1px solid rgba(16, 185, 129, 0.2)' }}>
-                 <CheckCircle size={40} style={{ color: '#10b981', margin: '0 auto 1rem' }} />
-                 <h4 style={{ color: '#10b981', marginBottom: '0.5rem', fontSize: '1.1rem' }}>Complaint Received!</h4>
-                 <p style={{ color: 'var(--text-secondary)', fontSize: '0.9rem', lineHeight: '1.5' }}>
-                   Our AI is analyzing your issue. You will receive an automated diagnostic report shortly.<br/>
-                   <span style={{ fontSize: '0.8rem', opacity: 0.8, marginTop: '8px', display: 'block' }}>
-                     (If you don't see it in your inbox, please check your spam folder)
-                   </span>
-                 </p>
-               </div>
+              <div style={{ padding: '2rem', textAlign: 'center', background: 'rgba(16, 185, 129, 0.1)', borderRadius: '12px', border: '1px solid rgba(16, 185, 129, 0.2)' }}>
+                <CheckCircle size={40} style={{ color: '#10b981', margin: '0 auto 1rem' }} />
+                <h4 style={{ color: '#10b981', marginBottom: '0.5rem', fontSize: '1.1rem' }}>Request Successfully Sent!</h4>
+                <p style={{ color: 'var(--text-secondary)', fontSize: '0.9rem', lineHeight: '1.5' }}>
+                  {clientForm.type === 'website'
+                    ? "Our development team is reviewing your project requirement. We'll send a proposal to your inbox shortly."
+                    : "Our AI is analyzing your issue. You will receive an automated diagnostic report shortly."
+                  }<br />
+                  <span style={{ fontSize: '0.8rem', opacity: 0.8, marginTop: '8px', display: 'block' }}>
+                    (If you don't see it in your inbox, please check your spam folder)
+                  </span>
+                </p>
+              </div>
             ) : (
-               <form onSubmit={(e) => {
-                 e.preventDefault();
-                 const newComplaint = {
-                   id: `comp-${Date.now()}`,
-                   timestamp: new Date().toLocaleString(),
-                   ...clientForm
-                 };
-                 setClientComplaints(prev => [newComplaint, ...prev]);
+              <form onSubmit={(e) => {
+                e.preventDefault();
+                const newComplaint = {
+                  id: `comp-${Date.now()}`,
+                  timestamp: new Date().toLocaleString(),
+                  ...clientForm
+                };
+                setClientComplaints(prev => [newComplaint, ...prev]);
 
-                 // --- SUPABASE SYNC (CLIENT COMPLAINT) ---
-                 supabase.from('client_complaints').insert([{
-                   name: clientForm.name,
-                   email: clientForm.email,
-                   address: clientForm.address,
-                   problem: clientForm.problem
-                 }]).then(({ error }) => {
-                   if (error) console.error('Supabase Sync Error:', error);
-                 });
-                 // -----------------------------------------
+                // --- SUPABASE SYNC (CLIENT REQUEST) ---
+                supabase.from('client_complaints').insert([{
+                  name: clientForm.name,
+                  email: clientForm.email,
+                  address: clientForm.address,
+                  problem: clientForm.problem,
+                  type: clientForm.type
+                }]).then(({ error }) => {
+                  if (error) console.error('Supabase Sync Error:', error);
+                });
+                // -----------------------------------------
 
-                 setComplaintSubmitted(true);
-                 setTimeout(() => setComplaintSubmitted(false), 6000);
-                 setClientForm({ name: '', email: '', address: '', problem: '' });
-               }}>
-                 <div className="input-group">
-                   <label>Full Name *</label>
-                   <input type="text" className="terminal-input" required value={clientForm.name} onChange={e => setClientForm({...clientForm, name: e.target.value})} placeholder="John Doe" />
-                 </div>
-                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '15px' }}>
-                   <div className="input-group">
-                     <label>Email Address *</label>
-                     <input type="email" className="terminal-input" required value={clientForm.email} onChange={e => setClientForm({...clientForm, email: e.target.value})} placeholder="john@company.com" />
-                   </div>
-                   <div className="input-group">
-                     <label>Address</label>
-                     <input type="text" className="terminal-input" value={clientForm.address} onChange={e => setClientForm({...clientForm, address: e.target.value})} placeholder="Office / Dept" />
-                   </div>
-                 </div>
-                 <div className="input-group">
-                   <label>Problem Description *</label>
-                   <textarea className="terminal-input" required value={clientForm.problem} onChange={e => setClientForm({...clientForm, problem: e.target.value})} placeholder="Describe exactly what is going wrong..." style={{ height: '100px' }}></textarea>
-                 </div>
-                 <button type="submit" className="btn-primary" style={{ width: '100%', justifyContent: 'center' }}>
-                   Submit Complaint
-                 </button>
-               </form>
+                setComplaintSubmitted(true);
+                setTimeout(() => setComplaintSubmitted(false), 6000);
+                setClientForm({ name: '', email: '', address: '', problem: '', type: 'complaint' });
+              }}>
+                <div className="input-group">
+                  <label>Full Name *</label>
+                  <input type="text" className="terminal-input" required value={clientForm.name} onChange={e => setClientForm({ ...clientForm, name: e.target.value })} placeholder="John Doe" />
+                </div>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '15px' }}>
+                  <div className="input-group">
+                    <label>Email Address *</label>
+                    <input type="email" className="terminal-input" required value={clientForm.email} onChange={e => setClientForm({ ...clientForm, email: e.target.value })} placeholder="john@company.com" />
+                  </div>
+                  <div className="input-group">
+                    <label>Request Type</label>
+                    <select className="terminal-input" value={clientForm.type} onChange={e => setClientForm({ ...clientForm, type: e.target.value })} style={{ height: '47px', background: 'rgba(255,255,255,0.02)', border: '1px solid var(--glass-border)', color: 'white' }}>
+                      <option value="complaint">🔧 Technical Support</option>
+                      <option value="website">🌐 Website & IT Solution</option>
+                    </select>
+                  </div>
+                </div>
+                <div className="input-group">
+                  <label>{clientForm.type === 'website' ? 'Project Requirements' : 'Problem Description'} *</label>
+                  <textarea className="terminal-input" required value={clientForm.problem} onChange={e => setClientForm({ ...clientForm, problem: e.target.value })} placeholder={clientForm.type === 'website' ? 'Describe your dream website or IT solution...' : 'Describe exactly what is going wrong...'} style={{ height: '100px' }}></textarea>
+                </div>
+                <button type="submit" className="btn-primary" style={{ width: '100%', justifyContent: 'center' }}>
+                  {clientForm.type === 'website' ? 'Get Website Proposal' : 'Submit Support Request'}
+                </button>
+              </form>
             )}
           </div>
 
@@ -789,12 +913,12 @@ Respond ONLY with the JSON object, no markdown, no code blocks, no explanation.`
             <label style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
               <User size={14} /> Username
             </label>
-            <input 
-              type="text" 
-              className="terminal-input" 
+            <input
+              type="text"
+              className="terminal-input"
               placeholder="operator id"
               value={loginForm.username}
-              onChange={e => setLoginForm({...loginForm, username: e.target.value})}
+              onChange={e => setLoginForm({ ...loginForm, username: e.target.value })}
               required
             />
           </div>
@@ -802,12 +926,12 @@ Respond ONLY with the JSON object, no markdown, no code blocks, no explanation.`
             <label style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
               <Lock size={14} /> Password
             </label>
-            <input 
-              type="password" 
-              className="terminal-input" 
+            <input
+              type="password"
+              className="terminal-input"
               placeholder="security key"
               value={loginForm.password}
-              onChange={e => setLoginForm({...loginForm, password: e.target.value})}
+              onChange={e => setLoginForm({ ...loginForm, password: e.target.value })}
               required
             />
           </div>
@@ -818,15 +942,15 @@ Respond ONLY with the JSON object, no markdown, no code blocks, no explanation.`
 
           <AnimatePresence>
             {authError && (
-              <motion.div 
+              <motion.div
                 initial={{ opacity: 0, scale: 0.95 }}
                 animate={{ opacity: 1, scale: 1 }}
                 exit={{ opacity: 0, scale: 0.95 }}
-                style={{ 
-                  marginTop: '1.5rem', 
-                  padding: '1rem', 
-                  background: 'rgba(239, 68, 68, 0.1)', 
-                  border: '1px solid rgba(239, 68, 68, 0.2)', 
+                style={{
+                  marginTop: '1.5rem',
+                  padding: '1rem',
+                  background: 'rgba(239, 68, 68, 0.1)',
+                  border: '1px solid rgba(239, 68, 68, 0.2)',
                   borderRadius: '12px',
                   color: '#f87171',
                   fontSize: '0.85rem',
@@ -863,7 +987,7 @@ Respond ONLY with the JSON object, no markdown, no code blocks, no explanation.`
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
                 <h2 style={{ margin: 0 }}>Create Custom Report</h2>
                 {/* AI Assist Toggle */}
-                <div 
+                <div
                   className="ai-mode-toggle"
                   onClick={() => setAiAssistEnabled(!aiAssistEnabled)}
                   style={{
@@ -895,12 +1019,12 @@ Respond ONLY with the JSON object, no markdown, no code blocks, no explanation.`
               {/* Problem Title - always visible */}
               <div className="input-group">
                 <label>Problem Title <span style={{ color: '#f87171' }}>*</span></label>
-                <input 
-                  type="text" 
-                  className="terminal-input" 
+                <input
+                  type="text"
+                  className="terminal-input"
                   placeholder="e.g., Laptop overheating when gaming"
-                  value={newReport.problem} 
-                  onChange={e => setNewReport({...newReport, problem: e.target.value})} 
+                  value={newReport.problem}
+                  onChange={e => setNewReport({ ...newReport, problem: e.target.value })}
                 />
               </div>
 
@@ -913,7 +1037,7 @@ Respond ONLY with the JSON object, no markdown, no code blocks, no explanation.`
                     style={{
                       width: '100%', padding: '12px 20px', borderRadius: '12px',
                       border: '1px dashed rgba(139, 92, 246, 0.4)',
-                      background: isAiGenerating 
+                      background: isAiGenerating
                         ? 'linear-gradient(135deg, rgba(139, 92, 246, 0.15), rgba(59, 130, 246, 0.15))'
                         : 'rgba(139, 92, 246, 0.05)',
                       color: !newReport.problem.trim() ? 'var(--text-muted)' : '#a78bfa',
@@ -959,11 +1083,11 @@ Respond ONLY with the JSON object, no markdown, no code blocks, no explanation.`
               {/* Description */}
               <div className="input-group">
                 <label>Problem Description {aiAssistEnabled && <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>(auto-filled by AI)</span>}</label>
-                <textarea 
-                  className="terminal-input" 
+                <textarea
+                  className="terminal-input"
                   placeholder={aiAssistEnabled ? 'Will be generated by AI...' : 'Describe the problem in detail'}
-                  value={newReport.description} 
-                  onChange={e => setNewReport({...newReport, description: e.target.value})} 
+                  value={newReport.description}
+                  onChange={e => setNewReport({ ...newReport, description: e.target.value })}
                   style={isAiGenerating ? { opacity: 0.5, pointerEvents: 'none' } : {}}
                 />
               </div>
@@ -971,12 +1095,12 @@ Respond ONLY with the JSON object, no markdown, no code blocks, no explanation.`
               {/* Possible Error */}
               <div className="input-group">
                 <label>Possible Error {aiAssistEnabled && <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>(AI)</span>}</label>
-                <input 
-                  type="text" 
-                  className="terminal-input" 
+                <input
+                  type="text"
+                  className="terminal-input"
                   placeholder={aiAssistEnabled ? 'AI generated...' : 'e.g., Faulty RAM'}
-                  value={newReport.possibleError} 
-                  onChange={e => setNewReport({...newReport, possibleError: e.target.value})} 
+                  value={newReport.possibleError}
+                  onChange={e => setNewReport({ ...newReport, possibleError: e.target.value })}
                   style={isAiGenerating ? { opacity: 0.5, pointerEvents: 'none' } : {}}
                 />
               </div>
@@ -985,22 +1109,22 @@ Respond ONLY with the JSON object, no markdown, no code blocks, no explanation.`
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '15px' }}>
                 <div className="input-group">
                   <label>Frequency</label>
-                  <input 
-                    type="text" 
-                    className="terminal-input" 
-                    value={newReport.frequency} 
-                    onChange={e => setNewReport({...newReport, frequency: e.target.value})} 
+                  <input
+                    type="text"
+                    className="terminal-input"
+                    value={newReport.frequency}
+                    onChange={e => setNewReport({ ...newReport, frequency: e.target.value })}
                     style={isAiGenerating ? { opacity: 0.5, pointerEvents: 'none' } : {}}
                   />
                 </div>
                 <div className="input-group">
                   <label>Estimated Cost {aiAssistEnabled && <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>(AI)</span>}</label>
-                  <input 
-                    type="text" 
-                    className="terminal-input" 
+                  <input
+                    type="text"
+                    className="terminal-input"
                     placeholder={aiAssistEnabled ? 'AI generated...' : 'e.g., Free / $50'}
-                    value={newReport.estimatedCost} 
-                    onChange={e => setNewReport({...newReport, estimatedCost: e.target.value})} 
+                    value={newReport.estimatedCost}
+                    onChange={e => setNewReport({ ...newReport, estimatedCost: e.target.value })}
                     style={isAiGenerating ? { opacity: 0.5, pointerEvents: 'none' } : {}}
                   />
                 </div>
@@ -1009,24 +1133,24 @@ Respond ONLY with the JSON object, no markdown, no code blocks, no explanation.`
               {/* Suggested Solution */}
               <div className="input-group">
                 <label>Suggested Solution {aiAssistEnabled && <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>(AI)</span>}</label>
-                <textarea 
-                  className="terminal-input" 
+                <textarea
+                  className="terminal-input"
                   placeholder={aiAssistEnabled ? 'Will be generated by AI...' : 'Provide step-by-step solution'}
-                  value={newReport.suggestedSolution} 
-                  onChange={e => setNewReport({...newReport, suggestedSolution: e.target.value})} 
+                  value={newReport.suggestedSolution}
+                  onChange={e => setNewReport({ ...newReport, suggestedSolution: e.target.value })}
                   style={isAiGenerating ? { opacity: 0.5, pointerEvents: 'none' } : {}}
                 />
               </div>
 
               {/* Send Immediately Checkbox */}
               <div className="input-group" style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '1.5rem', background: 'rgba(59, 130, 246, 0.05)', padding: '12px', borderRadius: '12px' }}>
-                <input type="checkbox" id="sendImmediately" style={{ width: '18px', height: '18px' }} checked={newReport.sendImmediately} onChange={e => setNewReport({...newReport, sendImmediately: e.target.checked})} />
+                <input type="checkbox" id="sendImmediately" style={{ width: '18px', height: '18px' }} checked={newReport.sendImmediately} onChange={e => setNewReport({ ...newReport, sendImmediately: e.target.checked })} />
                 <label htmlFor="sendImmediately" style={{ margin: 0, color: 'var(--accent-primary)', fontSize: '0.95rem', cursor: 'pointer', fontWeight: '600' }}>Send report immediately to complainant</label>
               </div>
               {newReport.sendImmediately && (
                 <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }}>
-                  <div className="input-group"><label>Recipient Name</label><input type="text" className="terminal-input" value={newReport.targetName} onChange={e => setNewReport({...newReport, targetName: e.target.value})} /></div>
-                  <div className="input-group"><label>Recipient Email</label><input type="email" className="terminal-input" value={newReport.targetEmail} onChange={e => setNewReport({...newReport, targetEmail: e.target.value})} /></div>
+                  <div className="input-group"><label>Recipient Name</label><input type="text" className="terminal-input" value={newReport.targetName} onChange={e => setNewReport({ ...newReport, targetName: e.target.value })} /></div>
+                  <div className="input-group"><label>Recipient Email</label><input type="email" className="terminal-input" value={newReport.targetEmail} onChange={e => setNewReport({ ...newReport, targetEmail: e.target.value })} /></div>
                 </motion.div>
               )}
 

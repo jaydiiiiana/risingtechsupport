@@ -18,7 +18,7 @@ export const reports: TroubleshootingReport[] = [
     suggestedSolution: 'Check all power connections, try a different outlet, perform a hard reset, or test with a known good power adapter.',
     frequency: '85% (High)',
     icon: 'MonitorOff',
-    estimatedCost: '$0 - $150 (Depending on part)',
+    estimatedCost: '₱0 - ₱7,500 (Depending on part)',
   },
   {
     id: 'no-internet',
