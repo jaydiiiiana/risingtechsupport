@@ -6,6 +6,7 @@ export interface TroubleshootingReport {
   suggestedSolution: string;
   frequency: string;
   icon: string;
+  estimatedCost?: string;
 }
 
 export const reports: TroubleshootingReport[] = [
@@ -17,6 +18,7 @@ export const reports: TroubleshootingReport[] = [
     suggestedSolution: 'Check all power connections, try a different outlet, perform a hard reset, or test with a known good power adapter.',
     frequency: '85% (High)',
     icon: 'MonitorOff',
+    estimatedCost: '$0 - $150 (Depending on part)',
   },
   {
     id: 'no-internet',
@@ -26,6 +28,7 @@ export const reports: TroubleshootingReport[] = [
     suggestedSolution: 'Restart the router, toggle Airplane mode, forget and reconnect to the network, or flush DNS settings.',
     frequency: '92% (Very High)',
     icon: 'WifiOff',
+    estimatedCost: 'Free (In-house fix)',
   },
   {
     id: 'app-loading',
@@ -35,5 +38,6 @@ export const reports: TroubleshootingReport[] = [
     suggestedSolution: 'Update the application, clear cache/temporary files, reinstall the app, or check for system updates.',
     frequency: '78% (Moderate)',
     icon: 'AppWindow',
+    estimatedCost: 'Free (Software fix)',
   },
 ];
