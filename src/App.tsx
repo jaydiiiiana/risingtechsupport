@@ -57,7 +57,7 @@ const App: React.FC = () => {
   const [authError, setAuthError] = useState<string | null>(null);
   const [showLogin, setShowLogin] = useState(false);
   const [clientComplaints, setClientComplaints] = useState<any[]>([]);
-  const [clientForm, setClientForm] = useState({ name: '', email: '', address: '', problem: '', type: 'complaint' });
+  const [clientForm, setClientForm] = useState({ name: '', email: '', address: '', problem: '', type: 'complaint', category: 'company' });
   const [complaintSubmitted, setComplaintSubmitted] = useState(false);
 
   // --- SUPABASE FETCH LOGIC ---
@@ -851,7 +851,8 @@ Respond ONLY with the STRICT JSON object, no markdown, no explanation.`;
                   email: clientForm.email,
                   address: clientForm.address,
                   problem: clientForm.problem,
-                  type: clientForm.type
+                  type: clientForm.type,
+                  category: (clientForm as any).category
                 }]).then(({ error }) => {
                   if (error) console.error('Supabase Sync Error:', error);
                 });
@@ -859,11 +860,21 @@ Respond ONLY with the STRICT JSON object, no markdown, no explanation.`;
 
                 setComplaintSubmitted(true);
                 setTimeout(() => setComplaintSubmitted(false), 6000);
-                setClientForm({ name: '', email: '', address: '', problem: '', type: 'complaint' });
+                setClientForm({ name: '', email: '', address: '', problem: '', type: 'complaint', category: 'company' });
               }}>
-                <div className="input-group">
-                  <label>Full Name *</label>
-                  <input type="text" className="terminal-input" required value={clientForm.name} onChange={e => setClientForm({ ...clientForm, name: e.target.value })} placeholder="John Doe" />
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '15px' }}>
+                  <div className="input-group">
+                    <label>Full Name *</label>
+                    <input type="text" className="terminal-input" required value={clientForm.name} onChange={e => setClientForm({ ...clientForm, name: e.target.value })} placeholder="John Doe" />
+                  </div>
+                  <div className="input-group">
+                    <label>I am a...</label>
+                    <select className="terminal-input" value={clientForm.category} onChange={e => setClientForm({ ...clientForm, category: e.target.value })} style={{ height: '47px', background: 'rgba(255,255,255,0.02)', border: '1px solid var(--glass-border)', color: 'white' }}>
+                      <option value="student" style={{ background: '#0f172a' }}>🎓 Student</option>
+                      <option value="organization" style={{ background: '#0f172a' }}>🏛️ Organization</option>
+                      <option value="company" style={{ background: '#0f172a' }}>🏢 Company / Business</option>
+                    </select>
+                  </div>
                 </div>
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '15px' }}>
                   <div className="input-group">
@@ -873,8 +884,8 @@ Respond ONLY with the STRICT JSON object, no markdown, no explanation.`;
                   <div className="input-group">
                     <label>Request Type</label>
                     <select className="terminal-input" value={clientForm.type} onChange={e => setClientForm({ ...clientForm, type: e.target.value })} style={{ height: '47px', background: 'rgba(255,255,255,0.02)', border: '1px solid var(--glass-border)', color: 'white' }}>
-                      <option value="complaint">🔧 Technical Support</option>
-                      <option value="website">🌐 Website & IT Solution</option>
+                      <option value="complaint" style={{ background: '#0f172a' }}>🔧 Technical Support</option>
+                      <option value="website" style={{ background: '#0f172a' }}>🌐 Website & IT Solution</option>
                     </select>
                   </div>
                 </div>
