@@ -25,6 +25,12 @@ import {
 import { motion, AnimatePresence } from 'framer-motion';
 import { reports, type TroubleshootingReport } from './data/reports';
 import { GoogleGenerativeAI } from '@google/generative-ai';
+import { createClient } from '@supabase/supabase-js';
+
+// Initialize Supabase Client
+const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
+const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
+const supabase = createClient(supabaseUrl, supabaseAnonKey);
 
 interface SentHistoryItem {
   id: string;
@@ -239,6 +245,17 @@ Respond ONLY with the JSON object, no markdown, no code blocks, no explanation.`
       };
       setSentHistory(prev => [historyItem, ...prev]);
 
+      // --- SUPABASE SYNC (EMAIL LOG) ---
+      supabase.from('email_logs').insert([{
+        recipient_email: targetEmail,
+        complainant_name: complainantName,
+        problem: reportToUse.problem,
+        status: 'success'
+      }]).then(({ error }) => {
+        if (error) console.error('Supabase Sync Error (Email Log):', error);
+      });
+      // ---------------------------------
+
       setIsSending(false);
       setIsSent(true);
       setTimeout(() => setIsSent(false), 3000);
@@ -277,6 +294,21 @@ Respond ONLY with the JSON object, no markdown, no code blocks, no explanation.`
     
     setDynamicReports(prev => [...prev, report]);
     setSelectedReportId(id);
+
+    // --- SUPABASE SYNC (REPORT TEMPLATE) ---
+    supabase.from('reports').insert([{
+      problem: report.problem,
+      description: report.description,
+      possible_error: report.possibleError,
+      suggested_solution: report.suggestedSolution,
+      frequency: report.frequency,
+      estimated_cost: report.estimatedCost,
+      icon: report.icon,
+      is_custom: true
+    }]).then(({ error }) => {
+      if (error) console.error('Supabase Sync Error (Report):', error);
+    });
+    // ---------------------------------------
 
     if (newReport.sendImmediately && newReport.targetEmail) {
       setComplainantName(newReport.targetName || 'Valued Client');
@@ -692,6 +724,18 @@ Respond ONLY with the JSON object, no markdown, no code blocks, no explanation.`
                    ...clientForm
                  };
                  setClientComplaints(prev => [newComplaint, ...prev]);
+
+                 // --- SUPABASE SYNC (CLIENT COMPLAINT) ---
+                 supabase.from('client_complaints').insert([{
+                   name: clientForm.name,
+                   email: clientForm.email,
+                   address: clientForm.address,
+                   problem: clientForm.problem
+                 }]).then(({ error }) => {
+                   if (error) console.error('Supabase Sync Error:', error);
+                 });
+                 // -----------------------------------------
+
                  setComplaintSubmitted(true);
                  setTimeout(() => setComplaintSubmitted(false), 6000);
                  setClientForm({ name: '', email: '', address: '', problem: '' });
