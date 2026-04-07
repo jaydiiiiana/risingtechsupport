@@ -77,7 +77,8 @@ const App: React.FC = () => {
           email: c.email,
           address: c.address,
           problem: c.problem,
-          type: c.type || 'complaint'
+          type: c.type || 'complaint',
+          category: c.category || 'company'
         })));
       }
 
