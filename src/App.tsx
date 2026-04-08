@@ -602,24 +602,26 @@ const App: React.FC = () => {
     const isOtherUserTask = task.createdBy === task.assignedTo && task.assignedTo !== currentUser?.id;
 
     if (isAdmin) {
-      // If it's another user's own task, admin can't manage
+      // Admins can manage everything except other users' own personal tasks
       if (isOtherUserTask) {
         alert("You cannot manage this user's personal task.");
         return;
       }
     } else {
       // Non-admin logic:
+      const isAssignedToMe = task.assignedTo === currentUser?.id;
+      const isMyOwnTask = task.createdBy === currentUser?.id;
+
+      if (!isAssignedToMe && !isMyOwnTask) {
+        alert("You do not have permission to manage this task.");
+        return;
+      }
+
       if (isTaskFromAdmin) {
-        // If task was given by admin, user can only move between specific statuses
+        // If task was given by admin, user can move it (Working -> Review) but not final Done/Archive
         if (newStatus === 'done' || newStatus === 'archived') {
            alert("Only Admin can complete or archive this task."); 
            return;
-        }
-      } else {
-        // If it's NOT from admin, only the creator can control it
-        if (task.createdBy !== currentUser?.id) {
-          alert("Only the task creator can manage this task.");
-          return;
         }
       }
     }
@@ -685,8 +687,8 @@ const App: React.FC = () => {
     } catch (err) { console.error('Delete Task Error:', err); }
   };
 
-  const renderArchive = () => {
-    const archivedTasks = kanbanTasks.filter(t => t.status === 'archived');
+  const renderArchive = (tasksInArchive?: KanbanTask[]) => {
+    const archivedTasks = (tasksInArchive || kanbanTasks).filter(t => t.status === 'archived');
 
     return (
       <div className="animate-fade-in kanban-container">
@@ -756,10 +758,22 @@ const App: React.FC = () => {
       { id: 'done', label: 'Done', icon: CheckCircle, color: '#10b981' }
     ];
 
+    // Visibility Calculation:
+    const visibleTasks = kanbanTasks.filter(task => {
+      const isPersonalTask = task.createdBy === task.assignedTo && task.createdBy !== currentUser?.id;
+      if (isAdmin) {
+        // Admins see everything except users' private personal tasks
+        return !isPersonalTask;
+      } else {
+        // Users see tasks assigned to them OR tasks they created
+        return task.assignedTo === currentUser?.id || task.createdBy === currentUser?.id;
+      }
+    });
+
     const isBoard = kanbanView === 'board';
     const isArchive = kanbanView === 'archive';
 
-    if (isArchive) return renderArchive();
+    if (isArchive) return renderArchive(visibleTasks);
 
     return (
       <div className="animate-fade-in kanban-container">
@@ -791,13 +805,13 @@ const App: React.FC = () => {
                 <div className="col-title">
                   <col.icon size={16} style={{ color: col.color }} />
                   <span>{col.label}</span>
-                  <span className="count">{kanbanTasks.filter(t => t.status === col.id).length}</span>
+                  <span className="count">{visibleTasks.filter(t => t.status === col.id).length}</span>
                 </div>
                 <MoreVertical size={14} className="text-muted" />
               </div>
 
               <div className="kanban-task-list">
-                {kanbanTasks.filter(t => t.status === col.id).map(task => (
+                {visibleTasks.filter(t => t.status === col.id).map(task => (
                   <div
                     key={task.id}
                     draggable
