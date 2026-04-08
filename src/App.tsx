@@ -362,7 +362,7 @@ const App: React.FC = () => {
     setIsAiGenerating(true); setAiError(null);
     try {
       const prompt = `You are an expert IT Solution Architect at "Rising Tech Innovations". Analyze: "${newReport.problem.trim()}" and provide a JSON response with description, possibleError, suggestedSolution, estimatedCost (PHP), and frequency. Respond ONLY with valid JSON.`;
-      const models = ['gemini-1.5-flash-latest', 'gemini-1.5-flash', 'gemini-1.5-pro'];
+      const models = ['gemini-1.5-flash', 'gemini-1.5-pro', 'gemini-pro'];
       let text = '', lastErr = '';
       for (const m of models) {
         try {
@@ -633,7 +633,7 @@ const App: React.FC = () => {
     setKanbanAiGenerating(true);
     try {
       const prompt = `Based on the task title "${newTask.title}", write a 1-sentence professional description. Response should be plain text.`;
-      const models = ['gemini-1.5-flash-latest', 'gemini-1.5-flash', 'gemini-1.5-flash-8b', 'gemini-1.5-pro'];
+      const models = ['gemini-1.5-flash', 'gemini-pro'];
       let text = '', lastErr = '';
       
       for (const m of models) {
