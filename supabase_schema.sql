@@ -43,10 +43,23 @@ CREATE TABLE IF NOT EXISTS public.email_logs (
     created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
 );
 
+-- 4. Create KANBAN TASKS Table
+-- Stores your internal project management tasks
+CREATE TABLE IF NOT EXISTS public.kanban_tasks (
+    id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+    title TEXT NOT NULL,
+    description TEXT,
+    status TEXT DEFAULT 'todo' NOT NULL CHECK (status IN ('todo', 'in-progress', 'done')),
+    priority TEXT DEFAULT 'medium' NOT NULL CHECK (priority IN ('low', 'medium', 'high')),
+    due_at TIMESTAMP WITH TIME ZONE,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
+);
+
 -- 4. Set Up ROW LEVEL SECURITY (RLS)
 ALTER TABLE public.reports ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.email_logs ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.client_complaints ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.kanban_tasks ENABLE ROW LEVEL SECURITY;
 
 -- POLICY: Public visitors can ONLY INSERT their complaints
 CREATE POLICY "Public: Can submit complaints"
@@ -75,8 +88,23 @@ TO authenticated
 USING (true) 
 WITH CHECK (true);
 
+-- POLICY: Admin (Authenticated) can view/manage KANBAN TASKS
+CREATE POLICY "Admin: Full control of kanban tasks"
+ON public.kanban_tasks FOR ALL 
+TO authenticated 
+USING (true) 
+WITH CHECK (true);
+
 -- 5. SEED DATA (Default Reports)
 INSERT INTO public.reports (problem, description, possible_error, suggested_solution, frequency, icon, estimated_cost, is_custom)
 VALUES 
 ('PC not turning on', 'Device fails to power up.', 'Loose cable, PSU failure, motherboard issues.', 'Check connections, outlet, PSU test.', '85% (High)', 'MonitorOff', '$50 - $150', false),
 ('No internet connection', 'Unable to access network.', 'Router/Modem, ISP, password, drivers.', 'Restart router, toggle Wi-Fi, flush DNS.', '92% (Very High)', 'WifiOff', 'Free (In-house fix)', false);
+
+-- SEED DATA (Default Kanban Tasks)
+INSERT INTO public.kanban_tasks (title, description, status, priority)
+VALUES 
+('Implement AI Diagnosis', 'Integrate Gemini API for technical troubleshooting.', 'in-progress', 'high'),
+('Add Kanban Board', 'Create a visual project management tool.', 'todo', 'medium'),
+('System Deployment', 'Prepare for production release.', 'todo', 'high'),
+('UI Refinement', 'Polish macOS styles and transitions.', 'done', 'low');
