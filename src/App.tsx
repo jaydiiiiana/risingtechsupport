@@ -373,9 +373,7 @@ const App: React.FC = () => {
               contents: [{ role: 'user', parts: [{ text: prompt }] }],
               generationConfig: {
                 response_mime_type: "application/json",
-                temperature: 0.7,
-                top_p: 0.8,
-                top_k: 40
+                temperature: 0.7
               },
               safetySettings: [
                 { category: "HARM_CATEGORY_HARASSMENT", threshold: "BLOCK_NONE" },
@@ -396,7 +394,8 @@ const App: React.FC = () => {
         } catch (e: any) { lastErr = e.message; }
       }
       if (!text) throw new Error(lastErr || 'AI generation failed.');
-      const parsed = JSON.parse(text.replace(/^```json\s*/i, '').replace(/^```\s*/i, '').replace(/\s*```$/i, ''));
+      let cleanText = text.replace(/```json/gi, '').replace(/```/gi, '').trim();
+      const parsed = JSON.parse(cleanText);
       setNewReport(p => ({ ...p, description: parsed.description || p.description, possibleError: parsed.possibleError || p.possibleError, suggestedSolution: parsed.suggestedSolution || p.suggestedSolution, frequency: parsed.frequency || p.frequency, estimatedCost: parsed.estimatedCost || p.estimatedCost }));
     } catch (err: any) {
       setAiError(err.message?.includes('429') ? 'API Quota Exceeded.' : 'AI generation failed.');
