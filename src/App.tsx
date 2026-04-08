@@ -99,7 +99,7 @@ const App: React.FC = () => {
   const [currentTime, setCurrentTime] = useState(new Date());
   const [isTaskSubmitting, setIsTaskSubmitting] = useState(false);
   const [allUsers, setAllUsers] = useState<AppUser[]>([]);
-  
+
   // Appearance State
   const [theme, setTheme] = useState<'light' | 'dark'>(() => (localStorage.getItem('rt_theme') as any) || 'dark');
   const [wallpaper, setWallpaper] = useState(() => localStorage.getItem('rt_wallpaper') || 'linear-gradient(160deg, #0a0d14 0%, #0d1117 30%, #0f1520 60%, #0a0d14 100%)');
@@ -117,7 +117,7 @@ const App: React.FC = () => {
   useEffect(() => {
     localStorage.setItem('rt_clock_color', clockColor);
   }, [clockColor]);
-  
+
   // Kanban State
   const [kanbanTasks, setKanbanTasks] = useState<KanbanTask[]>(() => {
     const saved = localStorage.getItem('rising_tech_kanban');
@@ -182,12 +182,12 @@ const App: React.FC = () => {
       const { data: complaints, error: complaintsError } = await supabase.from('client_complaints').select('*').order('created_at', { ascending: false });
       if (complaintsError) console.error('Complaints Fetch Error:', complaintsError);
       if (complaints) {
-        setClientComplaints(complaints.map(c => ({ 
-          id: c.id, 
-          timestamp: new Date(c.created_at).toLocaleString(), 
-          name: c.name, email: c.email, address: c.address, 
-          problem: c.problem, type: c.type || 'complaint', 
-          category: c.category || 'company' 
+        setClientComplaints(complaints.map(c => ({
+          id: c.id,
+          timestamp: new Date(c.created_at).toLocaleString(),
+          name: c.name, email: c.email, address: c.address,
+          problem: c.problem, type: c.type || 'complaint',
+          category: c.category || 'company'
         })));
       }
 
@@ -195,13 +195,13 @@ const App: React.FC = () => {
       const { data: logs, error: logsError } = await supabase.from('email_logs').select('*').order('created_at', { ascending: false });
       if (logsError) console.error('Logs Fetch Error:', logsError);
       if (logs) {
-        setSentHistory(logs.map(l => ({ 
-          id: l.id, 
-          timestamp: new Date(l.created_at).toLocaleString(), 
-          recipient: l.recipient_email, 
-          complainantName: l.complainant_name, 
-          problem: l.problem, 
-          status: l.status as 'success' | 'error' 
+        setSentHistory(logs.map(l => ({
+          id: l.id,
+          timestamp: new Date(l.created_at).toLocaleString(),
+          recipient: l.recipient_email,
+          complainantName: l.complainant_name,
+          problem: l.problem,
+          status: l.status as 'success' | 'error'
         })));
       }
 
@@ -218,19 +218,19 @@ const App: React.FC = () => {
       const { data: tasks, error: tasksError } = await supabase.from('kanban_tasks').select('*').order('created_at', { ascending: true });
       if (tasksError) console.error('Kanban Fetch Error:', tasksError);
       if (tasks) {
-        const mappedTasks = tasks.map(t => ({ 
-          id: t.id, 
-          title: t.title, 
-          description: t.description, 
-          status: t.status as any, 
-          priority: t.priority as any, 
-          assignedTo: t.assigned_to, 
-          createdBy: t.created_by, 
-          dueAt: t.due_at, 
+        const mappedTasks = tasks.map(t => ({
+          id: t.id,
+          title: t.title,
+          description: t.description,
+          status: t.status as any,
+          priority: t.priority as any,
+          assignedTo: t.assigned_to,
+          createdBy: t.created_by,
+          dueAt: t.due_at,
           createdAt: t.created_at,
           updatedAt: t.updated_at
         }));
-        
+
         // Auto-archive check
         const now = new Date();
         const updatedTasks = mappedTasks.map(t => {
@@ -243,17 +243,17 @@ const App: React.FC = () => {
           }
           return t;
         });
-        
+
         setKanbanTasks(updatedTasks);
       }
-      
+
       // 5. Fetch Users
       const { data: users, error: usersError } = await supabase.from('app_users').select('id, username, full_name, role');
       if (usersError) console.error('Users Fetch Error:', usersError);
       if (users) setAllUsers(users);
 
-    } catch (err) { 
-      console.error('Master Sync Error:', err); 
+    } catch (err) {
+      console.error('Master Sync Error:', err);
     }
   }, [selectedReportId, currentUser]);
 
@@ -362,22 +362,34 @@ const App: React.FC = () => {
     setIsAiGenerating(true); setAiError(null);
     try {
       const prompt = `You are an expert IT Solution Architect at "Rising Tech Innovations". Analyze: "${newReport.problem.trim()}" and provide a JSON response with description, possibleError, suggestedSolution, estimatedCost (PHP), and frequency. Respond ONLY with valid JSON.`;
-      const models = ['gemini-1.5-flash', 'gemini-1.5-pro'];
+      const models = ['gemini-1.5-flash-latest', 'gemini-1.5-flash', 'gemini-1.5-pro'];
       let text = '', lastErr = '';
       for (const m of models) {
         try {
-          const res = await fetch(`https://generativelanguage.googleapis.com/v1/models/${m}:generateContent?key=${apiKey}`, { 
-            method: 'POST', 
-            headers: { 'Content-Type': 'application/json' }, 
-            body: JSON.stringify({ 
-              contents: [{ role: 'user', parts: [{ text: prompt }] }]
-            }) 
+          const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${m}:generateContent?key=${apiKey}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              contents: [{ role: 'user', parts: [{ text: prompt }] }],
+              generationConfig: {
+                response_mime_type: "application/json",
+                temperature: 0.7,
+                top_p: 0.8,
+                top_k: 40
+              },
+              safetySettings: [
+                { category: "HARM_CATEGORY_HARASSMENT", threshold: "BLOCK_NONE" },
+                { category: "HARM_CATEGORY_HATE_SPEECH", threshold: "BLOCK_NONE" },
+                { category: "HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold: "BLOCK_NONE" },
+                { category: "HARM_CATEGORY_DANGEROUS_CONTENT", threshold: "BLOCK_NONE" }
+              ]
+            })
           });
           const result = await res.json();
-          if (!res.ok) { 
+          if (!res.ok) {
             lastErr = result.error?.message || `HTTP ${res.status}`;
             console.error(`Gemini Error (${m}):`, result.error || result);
-            continue; 
+            continue;
           }
           text = result.candidates?.[0]?.content?.parts?.[0]?.text || '';
           if (text) break;
@@ -396,16 +408,16 @@ const App: React.FC = () => {
   const IconMap: Record<string, any> = { MonitorOff, WifiOff, AppWindow, Zap };
 
   // --- AUTH ---
-  const handleLogin = async (e: React.FormEvent) => { 
-    e.preventDefault(); 
+  const handleLogin = async (e: React.FormEvent) => {
+    e.preventDefault();
     setAuthError(null);
-    
+
     try {
       const { data, error } = await supabase
         .from('app_users')
         .select('*')
         .ilike('username', loginForm.username)
-        .eq('password', loginForm.password) 
+        .eq('password', loginForm.password)
         .eq('is_active', true)
         .single();
 
@@ -437,7 +449,7 @@ const App: React.FC = () => {
 
       setCurrentUser(userInfo);
       localStorage.setItem('rising_tech_user', JSON.stringify(userInfo));
-      
+
       // Seed update
       await supabase
         .from('app_users')
@@ -449,28 +461,28 @@ const App: React.FC = () => {
     }
   };
 
-  const handleLogout = () => { 
-    setCurrentUser(null); 
-    localStorage.removeItem('rising_tech_user'); 
+  const handleLogout = () => {
+    setCurrentUser(null);
+    localStorage.removeItem('rising_tech_user');
     localStorage.removeItem('rising_tech_windows');
     localStorage.removeItem('rising_tech_focused_window');
-    setOpenWindows([]); 
+    setOpenWindows([]);
   };
 
   // --- SEND EMAIL ---
   const handleLandingSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     const data = { ...clientForm };
-    
+
     try {
       // 1. Store in Database
-      const { error: dbError } = await supabase.from('client_complaints').insert([{ 
-        name: data.name, 
-        email: data.email, 
-        address: data.address, 
-        problem: data.problem, 
-        type: data.type, 
-        category: data.category 
+      const { error: dbError } = await supabase.from('client_complaints').insert([{
+        name: data.name,
+        email: data.email,
+        address: data.address,
+        problem: data.problem,
+        type: data.type,
+        category: data.category
       }]);
 
       if (dbError) {
@@ -480,7 +492,7 @@ const App: React.FC = () => {
 
       // 2. Send Email Notification
       const isWeb = data.type === 'website';
-      await fetch('https://api.emailjs.com/api/v1.0/email/send', {
+      const emailRes = await fetch('https://api.emailjs.com/api/v1.0/email/send', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -491,7 +503,7 @@ const App: React.FC = () => {
             subject: isWeb ? 'New Website Proposal Request' : 'New Technical Support Request',
             complainant_name: data.name,
             complainant_email: data.email,
-            to_email: data.email, // Notifying the user too if the template is set up that way, or just uses these params for the owner
+            to_email: data.email,
             problem: data.problem,
             description: `Category: ${data.category} | Type: ${data.type}`,
             status: 'PENDING'
@@ -499,7 +511,17 @@ const App: React.FC = () => {
         })
       });
 
-      // 3. UI Updates
+      // 3. Log Activity in Database
+      if (emailRes.ok) {
+        await supabase.from('email_logs').insert([{
+          recipient_email: data.email,
+          complainant_name: data.name,
+          problem: data.problem,
+          status: 'success'
+        }]);
+      }
+
+      // 4. UI Updates
       setComplaintSubmitted(true);
       setTimeout(() => setComplaintSubmitted(false), 6000);
       setClientForm({ name: '', email: '', address: '', problem: '', type: 'complaint', category: 'company' });
@@ -525,14 +547,60 @@ const App: React.FC = () => {
     }
   };
 
-  const handleAddReport = () => {
+  const handleAddReport = async () => {
+    if (!newReport.problem.trim()) return;
+
     const id = `custom-${Date.now()}`;
-    const report: TroubleshootingReport = { id, problem: newReport.problem, description: newReport.description, possibleError: newReport.possibleError, suggestedSolution: newReport.suggestedSolution, frequency: newReport.frequency, estimatedCost: newReport.estimatedCost, icon: 'Zap' };
-    setDynamicReports(p => [...p, report]); setSelectedReportId(id);
-    supabase.from('reports').insert([{ problem: report.problem, description: report.description, possible_error: report.possibleError, suggested_solution: report.suggestedSolution, frequency: report.frequency, estimated_cost: report.estimatedCost, icon: report.icon, is_custom: true }]);
-    if (newReport.sendImmediately && newReport.targetEmail) { setComplainantName(newReport.targetName || 'Valued Client'); setComplainantEmail(newReport.targetEmail); handleSendEmail(newReport.targetEmail, report); }
-    setIsModalOpen(false);
-    setNewReport({ problem: '', description: '', possibleError: '', suggestedSolution: '', frequency: '90%', estimatedCost: 'Free / Internal IT', sendImmediately: false, targetEmail: '', targetName: '' });
+    const report: TroubleshootingReport = {
+      id,
+      problem: newReport.problem,
+      description: newReport.description,
+      possibleError: newReport.possibleError,
+      suggestedSolution: newReport.suggestedSolution,
+      frequency: newReport.frequency,
+      estimatedCost: newReport.estimatedCost,
+      icon: 'Zap'
+    };
+
+    try {
+      // 1. Save to Supabase
+      const { error: dbError } = await supabase.from('reports').insert([{
+        problem: report.problem,
+        description: report.description,
+        possible_error: report.possibleError,
+        suggested_solution: report.suggestedSolution,
+        frequency: report.frequency,
+        estimated_cost: report.estimatedCost,
+        icon: report.icon,
+        is_custom: true
+      }]);
+
+      if (dbError) {
+        console.error('Template Sync Error:', dbError);
+        alert("Failed to save template to database: " + dbError.message);
+        return;
+      }
+
+      // 2. Update UI
+      setDynamicReports(p => [...p, report]);
+      setSelectedReportId(id);
+
+      if (newReport.sendImmediately && newReport.targetEmail) {
+        setComplainantName(newReport.targetName || 'Valued Client');
+        setComplainantEmail(newReport.targetEmail);
+        handleSendEmail(newReport.targetEmail, report);
+      }
+
+      setIsModalOpen(false);
+      setNewReport({
+        problem: '', description: '', possibleError: '',
+        suggestedSolution: '', frequency: '90%',
+        estimatedCost: 'Free / Internal IT',
+        sendImmediately: false, targetEmail: '', targetName: ''
+      });
+    } catch (err) {
+      console.error('Template Creation Error:', err);
+    }
   };
 
   const createDesktopShortcut = () => {
@@ -544,7 +612,7 @@ const App: React.FC = () => {
     link.download = 'RisingTech_Portal.url';
     link.click();
     URL.revokeObjectURL(link.href);
-    
+
     setIsSent(true); // Reuse transmission toast for feedback
     alert("Shortcut file downloaded. Move it to your Desktop or Tablet storage!");
   };
@@ -553,29 +621,67 @@ const App: React.FC = () => {
 
   // --- KANBAN ACTIONS ---
   const handleKanbanAiSuggest = async () => {
-    if (!newTask.title.trim()) return;
+    if (!newTask.title.trim()) {
+      alert("Please enter a task title first so the AI has something to work with!");
+      return;
+    }
     const apiKey = import.meta.env.VITE_GEMINI_API_KEY;
-    if (!apiKey) return;
+    if (!apiKey) {
+      alert("AI Config Error: VITE_GEMINI_API_KEY is missing from your .env file.");
+      return;
+    }
     setKanbanAiGenerating(true);
     try {
       const prompt = `Based on the task title "${newTask.title}", write a 1-sentence professional description. Response should be plain text.`;
-      const res = await fetch(`https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key=${apiKey}`, { 
-        method: 'POST', 
-        headers: { 'Content-Type': 'application/json' }, 
-        body: JSON.stringify({ 
-          contents: [{ role: 'user', parts: [{ text: prompt }] }]
-        }) 
-      });
-      const data = await res.json();
-      if (res.ok) {
-        const text = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
-        if (text) setNewTask(prev => ({ ...prev, description: text.trim() }));
-      } else {
-        console.error('Kanban AI Error Details:', data.error || data);
+      const models = ['gemini-1.5-flash-latest', 'gemini-1.5-flash', 'gemini-1.5-flash-8b', 'gemini-1.5-pro'];
+      let text = '', lastErr = '';
+      
+      for (const m of models) {
+        try {
+          const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${m}:generateContent?key=${apiKey}`, { 
+            method: 'POST', 
+            headers: { 'Content-Type': 'application/json' }, 
+            body: JSON.stringify({ 
+              contents: [{ role: 'user', parts: [{ text: prompt }] }],
+              generationConfig: {
+                response_mime_type: "application/json",
+                temperature: 0.7
+              }
+            }) 
+          });
+          const data = await res.json();
+          if (res.ok) {
+            text = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
+            if (text) break;
+          } else {
+            lastErr = data.error?.message || `HTTP ${res.status}`;
+            console.warn(`Kanban AI Fallback (${m}):`, lastErr);
+            continue; // Try next model
+          }
+        } catch (err) {
+          console.warn(`Kanban AI Connection Fail (${m})`);
+          continue;
+        }
       }
-    } catch (err) { console.error('Kanban AI Error:', err); }
-    finally { setKanbanAiGenerating(false); }
+
+      if (text) {
+        // Handle Gemini 1.5 JSON mode which sometimes wraps in an object or just returns the string
+        let cleanText = text.trim();
+        try {
+          const parsed = JSON.parse(cleanText);
+          cleanText = parsed.description || parsed.text || cleanText;
+        } catch(e) { /* Not JSON, use as is */ }
+        setNewTask(prev => ({ ...prev, description: cleanText }));
+      } else {
+        alert("AI Error: All models are currently at their limit or unavailable. " + lastErr);
+      }
+    } catch (err) { 
+      console.error('Kanban AI Error:', err);
+    } finally { 
+      setKanbanAiGenerating(false); 
+    }
   };
+
 
   const addTask = async () => {
     if (!newTask.title.trim() || isTaskSubmitting) return;
@@ -596,18 +702,18 @@ const App: React.FC = () => {
       // If data is returned (immediate feedback)
       if (data && data[0]) {
         const t = data[0];
-        const newTaskObj: KanbanTask = { 
-          id: t.id, 
-          title: t.title, 
-          description: t.description, 
-          status: t.status, 
-          priority: t.priority, 
+        const newTaskObj: KanbanTask = {
+          id: t.id,
+          title: t.title,
+          description: t.description,
+          status: t.status,
+          priority: t.priority,
           assignedTo: t.assigned_to,
           createdBy: t.created_by,
           dueAt: t.due_at,
-          createdAt: t.created_at 
+          createdAt: t.created_at
         };
-        
+
         // Only update if not already handled by real-time to avoid duplicates
         setKanbanTasks(prev => {
           if (prev.some(it => it.id === t.id)) return prev;
@@ -617,10 +723,10 @@ const App: React.FC = () => {
 
       setIsTaskModalOpen(false);
       setNewTask({ title: '', description: '', priority: 'medium', status: 'todo', dueAt: '', assignedTo: '' });
-    } catch (err) { 
+    } catch (err) {
       console.error('Add Task Error:', err);
       alert('Failed to add task. Please ensure you have run the SQL schema in your Supabase dashboard.');
-} finally {
+    } finally {
       setIsTaskSubmitting(false);
     }
   };
@@ -644,8 +750,8 @@ const App: React.FC = () => {
       // If it's a task assigned BY an admin TO a user:
       if (isTaskFromAdmin && !isCreatedByMe) {
         if (newStatus === 'done' || newStatus === 'archived') {
-           alert("Only Admin can complete or archive this task. Please move it to 'Review' instead."); 
-           return;
+          alert("Only Admin can complete or archive this task. Please move it to 'Review' instead.");
+          return;
         }
       }
     }
@@ -653,10 +759,10 @@ const App: React.FC = () => {
     try {
       // Optimistic Update
       setKanbanTasks(prev => prev.map(t => t.id === id ? { ...t, status: newStatus } : t));
-      
-      const { error } = await supabase.from('kanban_tasks').update({ 
-        status: newStatus, 
-        updated_at: new Date().toISOString() 
+
+      const { error } = await supabase.from('kanban_tasks').update({
+        status: newStatus,
+        updated_at: new Date().toISOString()
       }).eq('id', id);
       if (error) throw error;
     } catch (err) { console.error('Move Task Error:', err); }
@@ -700,7 +806,7 @@ const App: React.FC = () => {
         alert("You do not have permission to delete this task.");
         return;
       }
-      
+
       if (isTaskFromAdmin && !isCreatedByMe) {
         alert("You cannot delete a task assigned to you by an Admin.");
         return;
@@ -827,8 +933,8 @@ const App: React.FC = () => {
 
         <div className="kanban-board">
           {columns.map(col => (
-            <div 
-              key={col.id} 
+            <div
+              key={col.id}
               className="kanban-column"
               onDragOver={handleDragOver}
               onDrop={(e) => handleDrop(e, col.id)}
@@ -860,11 +966,11 @@ const App: React.FC = () => {
                       className={`kanban-card${task.status === 'done' ? ' task-completed' : ''}`}
                     >
                       <div className="card-top">
-                          {task.status === 'done' ? (
-                            <span className="priority-badge" style={{ background: 'rgba(16, 185, 129, 0.15)', color: '#10b981' }}>Verified</span>
-                          ) : (
-                            <span className={`priority-badge ${task.priority}`}>{task.priority}</span>
-                          )}
+                        {task.status === 'done' ? (
+                          <span className="priority-badge" style={{ background: 'rgba(16, 185, 129, 0.15)', color: '#10b981' }}>Verified</span>
+                        ) : (
+                          <span className={`priority-badge ${task.priority}`}>{task.priority}</span>
+                        )}
                         <div className="card-actions">
                           {task.assignedTo && (
                             <div className="task-assignee-mini" title={allUsers.find(u => u.id === task.assignedTo)?.full_name}>
@@ -876,7 +982,7 @@ const App: React.FC = () => {
                       </div>
                       <h4 className="task-title" style={task.status === 'done' ? { textDecoration: 'line-through', opacity: 0.6 } : {}}>{task.title}</h4>
                       <p className="task-desc" style={task.status === 'done' ? { opacity: 0.5 } : {}}>{task.description}</p>
-                      
+
                       <div className="card-footer">
                         <div className="task-meta">
                           {task.status === 'done' ? (
@@ -885,9 +991,9 @@ const App: React.FC = () => {
                             <Calendar size={12} />
                           )}
                           <span style={task.status !== 'done' && task.dueAt && new Date(task.dueAt) < new Date() ? { color: '#f87171', fontWeight: 600 } : {}}>
-                            {task.status === 'done' 
+                            {task.status === 'done'
                               ? `Finished on ${new Date().toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}`
-                              : task.dueAt 
+                              : task.dueAt
                                 ? `Due: ${new Date(task.dueAt).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}`
                                 : `Created: ${new Date(task.createdAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}`}
                           </span>
@@ -986,7 +1092,7 @@ const App: React.FC = () => {
   const renderSettings = () => (
     <div className="animate-fade-in">
       <div className="content-header"><div className="title-group"><h1>Configuration</h1><p>Manage connection and appearance.</p></div></div>
-      
+
       <div className="card">
         <h3>Desktop & Tablet Integration</h3>
         <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginBottom: '1.5rem' }}>
@@ -1000,7 +1106,7 @@ const App: React.FC = () => {
       <div className="card" style={{ marginTop: '1.5rem' }}>
         <h3>Appearance</h3>
         <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginTop: '0.3rem' }}>Configure system-wide visual styles.</p>
-        
+
         <div className="appearance-grid">
           <div className={`theme-card ${theme === 'light' ? 'active' : ''}`} onClick={() => setTheme('light')}>
             <div className="theme-preview">
@@ -1027,14 +1133,14 @@ const App: React.FC = () => {
           <label style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--text-secondary)' }}>Desktop Clock Color</label>
           <div style={{ display: 'flex', gap: '10px', marginTop: '0.75rem' }}>
             {['#ffffff', '#000000', '#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#d946ef'].map(color => (
-              <div 
-                key={color} 
+              <div
+                key={color}
                 onClick={() => setClockColor(color)}
-                style={{ 
-                  width: '28px', 
-                  height: '28px', 
-                  borderRadius: '50%', 
-                  background: color, 
+                style={{
+                  width: '28px',
+                  height: '28px',
+                  borderRadius: '50%',
+                  background: color,
                   cursor: 'pointer',
                   border: clockColor === color ? '2px solid var(--accent-primary)' : '2px solid transparent',
                   boxShadow: clockColor === color ? '0 0 0 2px rgba(59, 130, 246, 0.2)' : 'none',
@@ -1052,10 +1158,10 @@ const App: React.FC = () => {
               <Plus size={20} />
               <input type="file" id="wallpaper-input" hidden accept="image/*" onChange={handleWallpaperUpload} />
             </div>
-            
+
             {/* Show custom uploaded wallpaper if active and not a preset */}
             {wallpaper.startsWith('url(data:') && (
-              <div 
+              <div
                 className="wallpaper-thumb active"
                 style={{ background: wallpaper }}
                 title="Custom Photo"
@@ -1063,8 +1169,8 @@ const App: React.FC = () => {
             )}
 
             {WALLPAPERS.map(wp => (
-              <div 
-                key={wp.id} 
+              <div
+                key={wp.id}
                 className={`wallpaper-thumb ${wallpaper === wp.value ? 'active' : ''}`}
                 style={{ background: wp.value }}
                 onClick={() => setWallpaper(wp.value)}
@@ -1081,7 +1187,7 @@ const App: React.FC = () => {
           <div><div style={{ color: '#10b981', fontWeight: 600 }}>Active & Encrypted</div><div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginTop: '2px' }}>API credentials managed securely.</div></div>
         </div>
       </div>
-      
+
       <div className="card" style={{ marginTop: '1.5rem' }}>
         <h3>System Shortcuts</h3>
         <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginTop: '0.5rem', marginBottom: '1rem' }}>Create a direct shortcut on your desktop for quick access.</p>
@@ -1113,16 +1219,18 @@ const App: React.FC = () => {
           <button className="btn-primary" style={{ padding: '0.5rem 1rem', fontSize: '0.85rem' }} onClick={() => setIsModalOpen(true)}><Zap size={14} /> Add Report</button>
         </div>
         <div className="report-grid">
-          {dynamicReports.map(report => { const IC = IconMap[report.icon] || Zap; return (
-            <motion.div key={report.id} whileHover={{ y: -3 }} whileTap={{ scale: 0.98 }} className={`report-option ${selectedReportId === report.id ? 'selected' : ''}`} onClick={() => setSelectedReportId(report.id)}>
-              <div className="report-icon-box"><IC size={20} /></div>
-              <div><h3 style={{ marginBottom: '0.2rem', fontSize: '0.95rem' }}>{report.problem}</h3><p style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>{report.frequency}</p></div>
-            </motion.div>); })}
+          {dynamicReports.map(report => {
+            const IC = IconMap[report.icon] || Zap; return (
+              <motion.div key={report.id} whileHover={{ y: -3 }} whileTap={{ scale: 0.98 }} className={`report-option ${selectedReportId === report.id ? 'selected' : ''}`} onClick={() => setSelectedReportId(report.id)}>
+                <div className="report-icon-box"><IC size={20} /></div>
+                <div><h3 style={{ marginBottom: '0.2rem', fontSize: '0.95rem' }}>{report.problem}</h3><p style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>{report.frequency}</p></div>
+              </motion.div>);
+          })}
         </div>
       </section>
 
-      <div 
-        className="section-divider-h" 
+      <div
+        className="section-divider-h"
         onMouseDown={() => setIsResizingTools(true)}
       />
 
@@ -1200,8 +1308,8 @@ const App: React.FC = () => {
         <div style={{ textAlign: 'center', marginBottom: '4rem' }}><h2 style={{ fontSize: '2.5rem', marginBottom: '1rem' }}>Intelligent Support Matrix</h2><p style={{ color: 'var(--text-secondary)', maxWidth: '600px', margin: '0 auto' }}>Leveraging cloud AI to reduce technical downtime.</p></div>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: '2rem', maxWidth: '1200px', margin: '0 auto' }}>
           {[{ icon: Bot, color: '#3b82f6', title: 'AI Root-Cause Diagnosis', desc: 'Input symptoms, get precise error mapping instantly.' },
-            { icon: CheckCircle, color: '#10b981', title: 'Automated Cost Estimation', desc: 'Instant repair cost estimates before work begins.' },
-            { icon: Sparkles, color: '#8b5cf6', title: 'Premium Web Development', desc: 'High-conversion websites and custom internal tools.' }
+          { icon: CheckCircle, color: '#10b981', title: 'Automated Cost Estimation', desc: 'Instant repair cost estimates before work begins.' },
+          { icon: Sparkles, color: '#8b5cf6', title: 'Premium Web Development', desc: 'High-conversion websites and custom internal tools.' }
           ].map((f, i) => (
             <motion.div key={i} initial={{ opacity: 0, y: 20 }} whileInView={{ opacity: 1, y: 0 }} viewport={{ once: true }} transition={{ delay: i * 0.1 }} className="feature-card glass-card" style={{ padding: '2.5rem', transform: 'none' }}>
               <div className="report-icon-box" style={{ marginBottom: '1.5rem', background: `${f.color}15`, color: f.color }}><f.icon size={28} /></div>
@@ -1355,112 +1463,112 @@ const App: React.FC = () => {
           </motion.div>
         )}
       </AnimatePresence>
- 
+
       {/* Kanban Task Modal */}
       <AnimatePresence>
         {isTaskModalOpen && (
           <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="modal-backdrop" style={{ zIndex: 6000 }}>
             <motion.div initial={{ scale: 0.9, y: 20 }} animate={{ scale: 1, y: 0 }} className="modal-content task-modal-content card">
               <form onSubmit={(e) => { e.preventDefault(); addTask(); }}>
-              <h2 style={{ marginBottom: '1.5rem', fontSize: '1.5rem' }}>Create New Task</h2>
-              <div className="input-group">
-                <label>Task Title</label>
-                <input 
-                  type="text" 
-                  className="terminal-input" 
-                  placeholder="What needs to be done?" 
-                  value={newTask.title}
-                  onChange={e => setNewTask({...newTask, title: e.target.value})}
-                  autoFocus
-                  required
-                />
-              </div>
-              <div className="input-group">
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                  <label>Description</label>
-                  {newTask.title.trim() && (
-                    <button 
-                      type="button" 
-                      onClick={handleKanbanAiSuggest} 
-                      disabled={kanbanAiGenerating}
-                      style={{ background: 'none', border: 'none', color: '#a78bfa', fontSize: '0.75rem', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '4px', cursor: 'pointer', padding: '2px 8px' }}
+                <h2 style={{ marginBottom: '1.5rem', fontSize: '1.5rem' }}>Create New Task</h2>
+                <div className="input-group">
+                  <label>Task Title</label>
+                  <input
+                    type="text"
+                    className="terminal-input"
+                    placeholder="What needs to be done?"
+                    value={newTask.title}
+                    onChange={e => setNewTask({ ...newTask, title: e.target.value })}
+                    autoFocus
+                    required
+                  />
+                </div>
+                <div className="input-group">
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <label>Description</label>
+                    {newTask.title.trim() && (
+                      <button
+                        type="button"
+                        onClick={handleKanbanAiSuggest}
+                        disabled={kanbanAiGenerating}
+                        style={{ background: 'none', border: 'none', color: '#a78bfa', fontSize: '0.75rem', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '4px', cursor: 'pointer', padding: '2px 8px' }}
+                      >
+                        {kanbanAiGenerating ? <Loader2 size={12} className="animate-spin" /> : <Sparkles size={12} />}
+                        AI Suggest
+                      </button>
+                    )}
+                  </div>
+                  <textarea
+                    className="terminal-input"
+                    placeholder="Add more details..."
+                    value={newTask.description}
+                    onChange={e => setNewTask({ ...newTask, description: e.target.value })}
+                    style={{ height: '80px' }}
+                  />
+                </div>
+                <div className="task-modal-grid">
+                  <div className="input-group" style={{ marginBottom: 0 }}>
+                    <label>Priority</label>
+                    <select
+                      className="terminal-input"
+                      value={newTask.priority}
+                      onChange={e => setNewTask({ ...newTask, priority: e.target.value as any })}
                     >
-                      {kanbanAiGenerating ? <Loader2 size={12} className="animate-spin" /> : <Sparkles size={12} />}
-                      AI Suggest
-                    </button>
-                  )}
+                      <option value="low">Low</option>
+                      <option value="medium">Medium</option>
+                      <option value="high">High</option>
+                    </select>
+                  </div>
+                  <div className="input-group" style={{ marginBottom: 0 }}>
+                    <label>Initial Status</label>
+                    <select
+                      className="terminal-input"
+                      value={newTask.status}
+                      onChange={e => setNewTask({ ...newTask, status: e.target.value as any })}
+                    >
+                      <option value="todo">To Do</option>
+                      <option value="in-progress">In Progress</option>
+                      <option value="review">Needs Review</option>
+                      <option value="done">Done</option>
+                    </select>
+                  </div>
                 </div>
-                <textarea 
-                  className="terminal-input" 
-                  placeholder="Add more details..." 
-                  value={newTask.description}
-                  onChange={e => setNewTask({...newTask, description: e.target.value})}
-                  style={{ height: '80px' }}
-                />
-              </div>
-              <div className="task-modal-grid">
-                <div className="input-group" style={{ marginBottom: 0 }}>
-                  <label>Priority</label>
-                  <select 
-                    className="terminal-input"
-                    value={newTask.priority}
-                    onChange={e => setNewTask({...newTask, priority: e.target.value as any})}
-                  >
-                    <option value="low">Low</option>
-                    <option value="medium">Medium</option>
-                    <option value="high">High</option>
-                  </select>
-                </div>
-                <div className="input-group" style={{ marginBottom: 0 }}>
-                  <label>Initial Status</label>
-                  <select 
-                    className="terminal-input"
-                    value={newTask.status}
-                    onChange={e => setNewTask({...newTask, status: e.target.value as any})}
-                  >
-                    <option value="todo">To Do</option>
-                    <option value="in-progress">In Progress</option>
-                    <option value="review">Needs Review</option>
-                    <option value="done">Done</option>
-                  </select>
-                </div>
-              </div>
 
-              <div className="input-group">
-                <label>Assign To</label>
-                <select 
-                  className="terminal-input"
-                  value={newTask.assignedTo}
-                  onChange={e => setNewTask({...newTask, assignedTo: e.target.value})}
-                >
-                  <option value="">Myself</option>
-                  {allUsers
-                    .filter(u => u.id !== currentUser?.id) // Can't select self in list (it's 'Myself')
-                    .filter(u => isAdmin || u.role !== 'admin') // Non-admins CANNOT assign tasks to Admins
-                    .map(user => (
-                      <option key={user.id} value={user.id}>{user.full_name} (@{user.username}){user.role === 'admin' ? ' [ADMIN]' : ''}</option>
-                    ))}
-                </select>
-              </div>
-              <div className="input-group">
-                <label>Due Date & Time (Required)</label>
-                <input 
-                  type="datetime-local" 
-                  className="terminal-input" 
-                  value={newTask.dueAt}
-                  onChange={e => setNewTask({...newTask, dueAt: e.target.value})}
-                  onClick={(e) => (e.target as any).showPicker?.()}
-                  onFocus={(e) => (e.target as any).showPicker?.()}
-                  min={new Date(new Date().getTime() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 16)}
-                  required
-                />
-              </div>
-              <div style={{ display: 'flex', gap: '0.75rem', marginTop: '1.5rem' }}>
-                <button type="submit" disabled={isTaskSubmitting} className="btn-primary" style={{ flex: 1, justifyContent: 'center' }}>
-                  {isTaskSubmitting ? 'Creating...' : 'Create Task'}
-                </button>
-                <button type="button" disabled={isTaskSubmitting} className="nav-item" style={{ background: 'rgba(255,255,255,0.05)', border: 'none', padding: '0 1rem', cursor: 'pointer' }} onClick={() => setIsTaskModalOpen(false)}>Cancel</button>
-              </div>
+                <div className="input-group">
+                  <label>Assign To</label>
+                  <select
+                    className="terminal-input"
+                    value={newTask.assignedTo}
+                    onChange={e => setNewTask({ ...newTask, assignedTo: e.target.value })}
+                  >
+                    <option value="">Myself</option>
+                    {allUsers
+                      .filter(u => u.id !== currentUser?.id) // Can't select self in list (it's 'Myself')
+                      .filter(u => isAdmin || u.role !== 'admin') // Non-admins CANNOT assign tasks to Admins
+                      .map(user => (
+                        <option key={user.id} value={user.id}>{user.full_name} (@{user.username}){user.role === 'admin' ? ' [ADMIN]' : ''}</option>
+                      ))}
+                  </select>
+                </div>
+                <div className="input-group">
+                  <label>Due Date & Time (Required)</label>
+                  <input
+                    type="datetime-local"
+                    className="terminal-input"
+                    value={newTask.dueAt}
+                    onChange={e => setNewTask({ ...newTask, dueAt: e.target.value })}
+                    onClick={(e) => (e.target as any).showPicker?.()}
+                    onFocus={(e) => (e.target as any).showPicker?.()}
+                    min={new Date(new Date().getTime() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 16)}
+                    required
+                  />
+                </div>
+                <div style={{ display: 'flex', gap: '0.75rem', marginTop: '1.5rem' }}>
+                  <button type="submit" disabled={isTaskSubmitting} className="btn-primary" style={{ flex: 1, justifyContent: 'center' }}>
+                    {isTaskSubmitting ? 'Creating...' : 'Create Task'}
+                  </button>
+                  <button type="button" disabled={isTaskSubmitting} className="nav-item" style={{ background: 'rgba(255,255,255,0.05)', border: 'none', padding: '0 1rem', cursor: 'pointer' }} onClick={() => setIsTaskModalOpen(false)}>Cancel</button>
+                </div>
               </form>
             </motion.div>
           </motion.div>
