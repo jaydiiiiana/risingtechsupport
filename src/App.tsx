@@ -719,10 +719,7 @@ Respond ONLY with the STRICT JSON object, no markdown, no explanation.`;
     <div className="landing-page">
       <div className="landing-nav">
         <div className="logo-section" onClick={() => setShowLogin(true)} style={{ marginBottom: 0, cursor: 'default' }}>
-          <div className="logo-box">
-            <Zap size={24} fill="currentColor" />
-          </div>
-          <div className="logo-text" style={{ color: 'white' }}>RISING TECH</div>
+          <img src="/logo.png" alt="Rising Tech Logo" style={{ height: '45px', width: 'auto' }} />
         </div>
         <button className="btn-primary" onClick={() => setShowLogin(true)} style={{ padding: '0.6rem 1.2rem', fontSize: '0.9rem', display: 'none' }}>
           <Lock size={16} /> Support Portal Access
@@ -802,10 +799,7 @@ Respond ONLY with the STRICT JSON object, no markdown, no explanation.`;
 
           <div>
             <div className="logo-section" style={{ marginBottom: '1.5rem' }}>
-              <div className="logo-box">
-                <Zap size={24} fill="currentColor" />
-              </div>
-              <div className="logo-text" style={{ color: 'white' }}>RISING TECH</div>
+              <img src="/logo.png" alt="Rising Tech Logo" style={{ height: '50px', width: 'auto' }} />
             </div>
             <h3 style={{ fontSize: '1.5rem', marginBottom: '1rem' }}>Client Support Portal</h3>
             <p style={{ color: 'var(--text-muted)', lineHeight: '1.6', marginBottom: '2rem' }}>
@@ -918,9 +912,7 @@ Respond ONLY with the STRICT JSON object, no markdown, no explanation.`;
       <div className="card animate-fade-in" style={{ width: '100%', maxWidth: '400px', padding: '3rem', position: 'relative' }}>
         <button onClick={() => setShowLogin(false)} style={{ position: 'absolute', top: '15px', right: '15px', background: 'transparent', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer', fontSize: '1.2rem', padding: '5px' }}>✕</button>
         <div style={{ textAlign: 'center', marginBottom: '2.5rem' }}>
-          <div className="logo-box" style={{ margin: '0 auto 1.5rem', width: '60px', height: '60px' }}>
-            <Zap size={32} fill="currentColor" />
-          </div>
+          <img src="/logo.png" alt="Rising Tech Logo" style={{ height: '80px', width: 'auto', margin: '0 auto 1.5rem' }} />
           <h2 style={{ fontSize: '1.75rem', marginBottom: '0.5rem' }}>Terminal Access</h2>
           <p style={{ color: 'var(--text-secondary)' }}>Rising Tech Innovation Hub</p>
         </div>
@@ -1182,7 +1174,7 @@ Respond ONLY with the STRICT JSON object, no markdown, no explanation.`;
       </AnimatePresence>
 
       <aside className="sidebar">
-        <div className="logo-section"><div className="logo-box"><Zap size={24} fill="currentColor" /></div><div className="logo-text">RISING TECH</div></div>
+        <div className="logo-section"><img src="/logo.png" alt="Logo" style={{ height: '35px', width: 'auto' }} /></div>
         <nav className="nav-links">
           <div className={`nav-item ${activeTab === 'dashboard' ? 'active' : ''}`} onClick={() => setActiveTab('dashboard')}><LayoutDashboard size={20} /> Dashboard</div>
           <div className={`nav-item ${activeTab === 'sender' ? 'active' : ''}`} onClick={() => setActiveTab('sender')}><Mail size={20} /> Email Sender</div>
