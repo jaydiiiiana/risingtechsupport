@@ -178,17 +178,45 @@ const App: React.FC = () => {
   // --- DATA FETCH ---
   const fetchSupabaseData = useCallback(async () => {
     try {
-      const { data: complaints } = await supabase.from('client_complaints').select('*').order('created_at', { ascending: false });
-      if (complaints) setClientComplaints(complaints.map(c => ({ id: c.id, timestamp: new Date(c.created_at).toLocaleString(), name: c.name, email: c.email, address: c.address, problem: c.problem, type: c.type || 'complaint', category: c.category || 'company' })));
-      const { data: logs } = await supabase.from('email_logs').select('*').order('created_at', { ascending: false });
-      if (logs) setSentHistory(logs.map(l => ({ id: l.id, timestamp: new Date(l.created_at).toLocaleString(), recipient: l.recipient_email, complainantName: l.complainant_name, problem: l.problem, status: l.status as 'success' | 'error' })));
-      const { data: customReports } = await supabase.from('reports').select('*').order('created_at', { ascending: false });
+      // 1. Fetch Complaints
+      const { data: complaints, error: complaintsError } = await supabase.from('client_complaints').select('*').order('created_at', { ascending: false });
+      if (complaintsError) console.error('Complaints Fetch Error:', complaintsError);
+      if (complaints) {
+        setClientComplaints(complaints.map(c => ({ 
+          id: c.id, 
+          timestamp: new Date(c.created_at).toLocaleString(), 
+          name: c.name, email: c.email, address: c.address, 
+          problem: c.problem, type: c.type || 'complaint', 
+          category: c.category || 'company' 
+        })));
+      }
+
+      // 2. Fetch Email Logs
+      const { data: logs, error: logsError } = await supabase.from('email_logs').select('*').order('created_at', { ascending: false });
+      if (logsError) console.error('Logs Fetch Error:', logsError);
+      if (logs) {
+        setSentHistory(logs.map(l => ({ 
+          id: l.id, 
+          timestamp: new Date(l.created_at).toLocaleString(), 
+          recipient: l.recipient_email, 
+          complainantName: l.complainant_name, 
+          problem: l.problem, 
+          status: l.status as 'success' | 'error' 
+        })));
+      }
+
+      // 3. Fetch Reports
+      const { data: customReports, error: reportsError } = await supabase.from('reports').select('*').order('created_at', { ascending: false });
+      if (reportsError) console.error('Reports Fetch Error:', reportsError);
       if (customReports) {
         const mapped = customReports.map(r => ({ id: r.id, problem: r.problem, description: r.description, possibleError: r.possible_error, suggestedSolution: r.suggested_solution, frequency: r.frequency, estimatedCost: r.estimated_cost, icon: r.icon, isCustom: true }));
         setDynamicReports(mapped);
         if (mapped.length > 0 && !selectedReportId) setSelectedReportId(mapped[0].id);
       }
-      const { data: tasks } = await supabase.from('kanban_tasks').select('*').order('created_at', { ascending: true });
+
+      // 4. Fetch Kanban
+      const { data: tasks, error: tasksError } = await supabase.from('kanban_tasks').select('*').order('created_at', { ascending: true });
+      if (tasksError) console.error('Kanban Fetch Error:', tasksError);
       if (tasks) {
         const mappedTasks = tasks.map(t => ({ 
           id: t.id, 
@@ -205,24 +233,28 @@ const App: React.FC = () => {
         
         // Auto-archive check
         const now = new Date();
-        const updatedTasks = await Promise.all(mappedTasks.map(async t => {
+        const updatedTasks = mappedTasks.map(t => {
           if (t.status === 'done' && t.updatedAt) {
             const doneDate = new Date(t.updatedAt);
             if (now.getTime() - doneDate.getTime() > 24 * 60 * 60 * 1000) {
-              await supabase.from('kanban_tasks').update({ status: 'archived' }).eq('id', t.id);
+              supabase.from('kanban_tasks').update({ status: 'archived' }).eq('id', t.id);
               return { ...t, status: 'archived' as const };
             }
           }
           return t;
-        }));
+        });
         
         setKanbanTasks(updatedTasks);
       }
       
-      // Fetch all users so colleagues can assign tasks (with role filtering)
-      const { data: users } = await supabase.from('app_users').select('id, username, full_name, role');
+      // 5. Fetch Users
+      const { data: users, error: usersError } = await supabase.from('app_users').select('id, username, full_name, role');
+      if (usersError) console.error('Users Fetch Error:', usersError);
       if (users) setAllUsers(users);
-    } catch (err) { console.error('Fetch Error:', err); }
+
+    } catch (err) { 
+      console.error('Master Sync Error:', err); 
+    }
   }, [selectedReportId, currentUser]);
 
   useEffect(() => {
@@ -432,7 +464,7 @@ const App: React.FC = () => {
     
     try {
       // 1. Store in Database
-      await supabase.from('client_complaints').insert([{ 
+      const { error: dbError } = await supabase.from('client_complaints').insert([{ 
         name: data.name, 
         email: data.email, 
         address: data.address, 
@@ -440,6 +472,11 @@ const App: React.FC = () => {
         type: data.type, 
         category: data.category 
       }]);
+
+      if (dbError) {
+        console.error('Database Sync Error:', dbError);
+        alert("Success locally, but Database sync failed: " + dbError.message);
+      }
 
       // 2. Send Email Notification
       const isWeb = data.type === 'website';
