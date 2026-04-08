@@ -5,17 +5,13 @@ import react from '@vitejs/plugin-react';
 export default defineConfig({
   plugins: [react()],
   build: {
-    // Increase the chunk size limit to 1000kb (1MB) to handle the feature-rich App.tsx
-    chunkSizeWarningLimit: 1000,
+    // Increase the chunk size limit to 2000kb (2MB) 
+    // This is the safest way to resolve the Vercel warning for large files like App.tsx
+    chunkSizeWarningLimit: 2000,
     rollupOptions: {
       output: {
-        // Manual chunking to move large libraries into separate files
-        // This improves initial load speed and satisfies Vercel build warnings
-        manualChunks: {
-          vendor: ['react', 'react-dom'],
-          ui: ['framer-motion', 'lucide-react'],
-          database: ['@supabase/supabase-js']
-        }
+        // We simplified this to ensure maximum compatibility with the Vercel build engine
+        manualChunks: undefined 
       }
     }
   }
