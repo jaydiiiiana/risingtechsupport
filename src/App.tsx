@@ -219,10 +219,9 @@ const App: React.FC = () => {
         setKanbanTasks(updatedTasks);
       }
       
-      if (currentUser?.role === 'admin') {
-        const { data: users } = await supabase.from('app_users').select('id, username, full_name, role');
-        if (users) setAllUsers(users);
-      }
+      // Fetch all users so colleagues can assign tasks (with role filtering)
+      const { data: users } = await supabase.from('app_users').select('id, username, full_name, role');
+      if (users) setAllUsers(users);
     } catch (err) { console.error('Fetch Error:', err); }
   }, [selectedReportId, currentUser]);
 
@@ -584,7 +583,7 @@ const App: React.FC = () => {
     } catch (err) { 
       console.error('Add Task Error:', err);
       alert('Failed to add task. Please ensure you have run the SQL schema in your Supabase dashboard.');
-    } finally {
+} finally {
       setIsTaskSubmitting(false);
     }
   };
@@ -594,33 +593,21 @@ const App: React.FC = () => {
     if (!task) return;
 
     // Permissions check:
-    // 1. Task given by admin (createdBy is admin) -> only admin can manage (move/edit/delete)
-    // 2. User's own task (createdBy == assignedTo == user) -> admin cannot manage
-    
+    const isAssignedToMe = task.assignedTo === currentUser?.id;
+    const isCreatedByMe = task.createdBy === currentUser?.id;
     const taskCreator = allUsers.find(u => u.id === task.createdBy);
     const isTaskFromAdmin = taskCreator?.role === 'admin';
-    const isOtherUserTask = task.createdBy === task.assignedTo && task.assignedTo !== currentUser?.id;
 
-    if (isAdmin) {
-      // Admins can manage everything except other users' own personal tasks
-      if (isOtherUserTask) {
-        alert("You cannot manage this user's personal task.");
-        return;
-      }
-    } else {
-      // Non-admin logic:
-      const isAssignedToMe = task.assignedTo === currentUser?.id;
-      const isMyOwnTask = task.createdBy === currentUser?.id;
-
-      if (!isAssignedToMe && !isMyOwnTask) {
+    if (!isAdmin) {
+      if (!isAssignedToMe && !isCreatedByMe) {
         alert("You do not have permission to manage this task.");
         return;
       }
 
-      if (isTaskFromAdmin) {
-        // If task was given by admin, user can move it (Working -> Review) but not final Done/Archive
+      // If it's a task assigned BY an admin TO a user:
+      if (isTaskFromAdmin && !isCreatedByMe) {
         if (newStatus === 'done' || newStatus === 'archived') {
-           alert("Only Admin can complete or archive this task."); 
+           alert("Only Admin can complete or archive this task. Please move it to 'Review' instead."); 
            return;
         }
       }
@@ -630,7 +617,10 @@ const App: React.FC = () => {
       // Optimistic Update
       setKanbanTasks(prev => prev.map(t => t.id === id ? { ...t, status: newStatus } : t));
       
-      const { error } = await supabase.from('kanban_tasks').update({ status: newStatus, updated_at: new Date().toISOString() }).eq('id', id);
+      const { error } = await supabase.from('kanban_tasks').update({ 
+        status: newStatus, 
+        updated_at: new Date().toISOString() 
+      }).eq('id', id);
       if (error) throw error;
     } catch (err) { console.error('Move Task Error:', err); }
   };
@@ -664,26 +654,32 @@ const App: React.FC = () => {
     const task = kanbanTasks.find(t => t.id === id);
     if (!task) return;
 
-    if (isAdmin) {
-      if (task.createdBy === task.assignedTo && task.assignedTo !== currentUser?.id) {
-        alert("You cannot delete this user's personal task.");
+    const isCreatedByMe = task.createdBy === currentUser?.id;
+    const taskCreator = allUsers.find(u => u.id === task.createdBy);
+    const isTaskFromAdmin = taskCreator?.role === 'admin';
+
+    if (!isAdmin) {
+      if (!isCreatedByMe) {
+        alert("You do not have permission to delete this task.");
+        return;
+      }
+      
+      if (isTaskFromAdmin && !isCreatedByMe) {
+        alert("You cannot delete a task assigned to you by an Admin.");
         return;
       }
     } else {
-      // If not admin:
-      const taskCreator = allUsers.find(u => u.id === task.createdBy);
-      if (taskCreator?.role === 'admin') {
-        alert("Only admins can delete tasks they assigned.");
-        return;
-      }
-      if (task.createdBy !== currentUser?.id) {
-        alert("You can only delete tasks you created.");
+      // Admins can't delete other users' personal tasks
+      if (task.createdBy === task.assignedTo && task.createdBy !== currentUser?.id) {
+        alert("You cannot delete this user's personal task.");
         return;
       }
     }
 
     try {
-      await supabase.from('kanban_tasks').delete().eq('id', id);
+      setKanbanTasks(prev => prev.filter(t => t.id !== id));
+      const { error } = await supabase.from('kanban_tasks').delete().eq('id', id);
+      if (error) throw error;
     } catch (err) { console.error('Delete Task Error:', err); }
   };
 
@@ -760,14 +756,13 @@ const App: React.FC = () => {
 
     // Visibility Calculation:
     const visibleTasks = kanbanTasks.filter(task => {
-      const isPersonalTask = task.createdBy === task.assignedTo && task.createdBy !== currentUser?.id;
-      if (isAdmin) {
-        // Admins see everything except users' private personal tasks
-        return !isPersonalTask;
-      } else {
-        // Users see tasks assigned to them OR tasks they created
-        return task.assignedTo === currentUser?.id || task.createdBy === currentUser?.id;
+      const isPersonal = task.createdBy === task.assignedTo;
+      if (isPersonal) {
+        // Personal tasks are strictly for the owner (even Admins can't see others' personal tasks)
+        return task.createdBy === currentUser?.id;
       }
+      // Non-personal tasks: both the Assignee and the Creator can see it
+      return task.assignedTo === currentUser?.id || task.createdBy === currentUser?.id;
     });
 
     const isBoard = kanbanView === 'board';
@@ -862,9 +857,12 @@ const App: React.FC = () => {
                         </div>
                       </div>
 
-                      {task.status === 'review' && isAdmin && (
+                      {task.status === 'review' && (
                         <div className="review-actions">
-                          <button className="review-btn accept" onClick={() => moveTask(task.id, 'done')}>Accept</button>
+                          {/* Only Admin or the Creator can 'Accept' (Move to Done) an Admin task */}
+                          {(isAdmin || task.createdBy === currentUser?.id) && (
+                            <button className="review-btn accept" onClick={() => moveTask(task.id, 'done')}>Accept</button>
+                          )}
                           <button className="review-btn reject" onClick={() => moveTask(task.id, 'in-progress')}>Reject</button>
                         </div>
                       )}
@@ -1391,21 +1389,22 @@ const App: React.FC = () => {
                 </div>
               </div>
 
-              {isAdmin && (
-                <div className="input-group">
-                  <label>Assign To</label>
-                  <select 
-                    className="terminal-input"
-                    value={newTask.assignedTo}
-                    onChange={e => setNewTask({...newTask, assignedTo: e.target.value})}
-                  >
-                    <option value="">Myself</option>
-                    {allUsers.filter(u => u.id !== currentUser?.id).map(user => (
-                      <option key={user.id} value={user.id}>{user.full_name} (@{user.username})</option>
+              <div className="input-group">
+                <label>Assign To</label>
+                <select 
+                  className="terminal-input"
+                  value={newTask.assignedTo}
+                  onChange={e => setNewTask({...newTask, assignedTo: e.target.value})}
+                >
+                  <option value="">Myself</option>
+                  {allUsers
+                    .filter(u => u.id !== currentUser?.id) // Can't select self in list (it's 'Myself')
+                    .filter(u => isAdmin || u.role !== 'admin') // Non-admins CANNOT assign tasks to Admins
+                    .map(user => (
+                      <option key={user.id} value={user.id}>{user.full_name} (@{user.username}){user.role === 'admin' ? ' [ADMIN]' : ''}</option>
                     ))}
-                  </select>
-                </div>
-              )}
+                </select>
+              </div>
               <div className="input-group">
                 <label>Due Date & Time (Required)</label>
                 <input 
