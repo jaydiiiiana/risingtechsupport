@@ -49,17 +49,35 @@ CREATE TABLE IF NOT EXISTS public.kanban_tasks (
     id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
     title TEXT NOT NULL,
     description TEXT,
-    status TEXT DEFAULT 'todo' NOT NULL CHECK (status IN ('todo', 'in-progress', 'done')),
+    status TEXT DEFAULT 'todo' NOT NULL CHECK (status IN ('todo', 'in-progress', 'review', 'done', 'archived')),
     priority TEXT DEFAULT 'medium' NOT NULL CHECK (priority IN ('low', 'medium', 'high')),
+    assigned_to UUID REFERENCES public.app_users(id),
+    created_by UUID REFERENCES public.app_users(id),
     due_at TIMESTAMP WITH TIME ZONE,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
 );
 
--- 4. Set Up ROW LEVEL SECURITY (RLS)
+-- 5. Create APP_USERS Table (for admin-managed user accounts)
+-- This stores user credentials managed by the admin
+CREATE TABLE IF NOT EXISTS public.app_users (
+    id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+    username TEXT NOT NULL UNIQUE,
+    password TEXT NOT NULL,
+    full_name TEXT NOT NULL,
+    email TEXT,
+    role TEXT DEFAULT 'user' NOT NULL CHECK (role IN ('admin', 'user')),
+    is_active BOOLEAN DEFAULT true,
+    last_login TIMESTAMP WITH TIME ZONE,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
+);
+
+-- 6. Set Up ROW LEVEL SECURITY (RLS)
 ALTER TABLE public.reports ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.email_logs ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.client_complaints ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.kanban_tasks ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.app_users ENABLE ROW LEVEL SECURITY;
 
 -- POLICY: Public visitors can ONLY INSERT their complaints
 CREATE POLICY "Public: Can submit complaints"
@@ -95,7 +113,15 @@ TO authenticated
 USING (true) 
 WITH CHECK (true);
 
--- 5. SEED DATA (Default Reports)
+-- POLICY: Allow public (anon) to SELECT/INSERT/UPDATE app_users
+-- (The app handles auth logic in-app, not via Supabase auth)
+CREATE POLICY "Public: Full access to app_users"
+ON public.app_users FOR ALL
+TO public
+USING (true)
+WITH CHECK (true);
+
+-- 7. SEED DATA (Default Reports)
 INSERT INTO public.reports (problem, description, possible_error, suggested_solution, frequency, icon, estimated_cost, is_custom)
 VALUES 
 ('PC not turning on', 'Device fails to power up.', 'Loose cable, PSU failure, motherboard issues.', 'Check connections, outlet, PSU test.', '85% (High)', 'MonitorOff', '$50 - $150', false),
@@ -108,3 +134,9 @@ VALUES
 ('Add Kanban Board', 'Create a visual project management tool.', 'todo', 'medium'),
 ('System Deployment', 'Prepare for production release.', 'todo', 'high'),
 ('UI Refinement', 'Polish macOS styles and transitions.', 'done', 'low');
+
+-- SEED DATA (Default Admin User)
+-- Username: risingtech | Password: rising@tech@innovations
+INSERT INTO public.app_users (username, password, full_name, email, role)
+VALUES 
+('risingtech', 'rising@tech@innovations', 'Rising Tech Admin', 'admin@risingtech.innovation', 'admin');

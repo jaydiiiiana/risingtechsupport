@@ -3,7 +3,14 @@ import { useEffect, useState } from 'react';
 
 const supabase = createClient(
   'https://kcgszexuwgxqwwfnmyqd.supabase.co',
-  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImtjZ3N6ZXh1d2d4cXd3Zm5teXFkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzQ5Mzk1NjIsImV4cCI6MjA5MDUxNTU2Mn0.iCAE1riSUS6Rw3i8-tjVtUi3MCJSiz1nt_jLr3b-cvw'
+  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImtjZ3N6ZXh1d2d4cXd3Zm5teXFkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzQ5Mzk1NjIsImV4cCI6MjA5MDUxNTU2Mn0.iCAE1riSUS6Rw3i8-tjVtUi3MCJSiz1nt_jLr3b-cvw',
+  {
+    auth: {
+      persistSession: false,
+      autoRefreshToken: false,
+      detectSessionInUrl: false
+    }
+  }
 );
 
 export function MaintenanceGuard({ children, systemId }: { children: any, systemId: string }) {

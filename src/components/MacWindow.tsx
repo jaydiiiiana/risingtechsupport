@@ -142,9 +142,12 @@ const MacWindow: React.FC<MacWindowProps> = ({
       {/* All-edge Resize Handles */}
       {!isFullscreen && !isMinimized && (
         <>
+          <div style={{ position: 'absolute', top: 0, left: H, right: H, height: H, cursor: 'ns-resize', zIndex: 10 }} onMouseDown={e => handleResizeStart(e, 'n')} />
           <div style={{ position: 'absolute', bottom: 0, left: H, right: H, height: H, cursor: 'ns-resize', zIndex: 10 }} onMouseDown={e => handleResizeStart(e, 's')} />
-          <div style={{ position: 'absolute', top: 40, left: 0, bottom: H, width: H, cursor: 'ew-resize', zIndex: 10 }} onMouseDown={e => handleResizeStart(e, 'w')} />
-          <div style={{ position: 'absolute', top: 40, right: 0, bottom: H, width: H, cursor: 'ew-resize', zIndex: 10 }} onMouseDown={e => handleResizeStart(e, 'e')} />
+          <div style={{ position: 'absolute', top: H, left: 0, bottom: H, width: H, cursor: 'ew-resize', zIndex: 10 }} onMouseDown={e => handleResizeStart(e, 'w')} />
+          <div style={{ position: 'absolute', top: H, right: 0, bottom: H, width: H, cursor: 'ew-resize', zIndex: 10 }} onMouseDown={e => handleResizeStart(e, 'e')} />
+          <div style={{ position: 'absolute', top: 0, left: 0, width: H * 2, height: H * 2, cursor: 'nwse-resize', zIndex: 11 }} onMouseDown={e => handleResizeStart(e, 'nw')} />
+          <div style={{ position: 'absolute', top: 0, right: 0, width: H * 2, height: H * 2, cursor: 'nesw-resize', zIndex: 11 }} onMouseDown={e => handleResizeStart(e, 'ne')} />
           <div style={{ position: 'absolute', bottom: 0, left: 0, width: H * 2, height: H * 2, cursor: 'nesw-resize', zIndex: 11 }} onMouseDown={e => handleResizeStart(e, 'sw')} />
           <div style={{ position: 'absolute', bottom: 0, right: 0, width: H * 2, height: H * 2, cursor: 'nwse-resize', zIndex: 11 }} onMouseDown={e => handleResizeStart(e, 'se')} />
         </>

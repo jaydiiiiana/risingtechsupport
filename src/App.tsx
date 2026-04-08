@@ -4,16 +4,14 @@ import {
   CheckCircle, Clock, MonitorOff, WifiOff,
   AppWindow, Zap, AlertCircle, User, Lock, LogOut,
   Sparkles, Bot, Loader2, PenLine, MapPin, Phone,
-  Columns2, Plus, MoreVertical, Trash2, Calendar
+  Columns2, Plus, MoreVertical, Trash2, Calendar, ShieldCheck
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { type TroubleshootingReport } from './data/reports';
-import { createClient } from '@supabase/supabase-js';
+import { supabase } from './lib/supabase';
 import MacWindow from './components/MacWindow';
+import UserManagement from './components/UserManagement';
 
-const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || 'https://placeholder.supabase.co';
-const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY || 'placeholder';
-const supabase = createClient(supabaseUrl, supabaseAnonKey);
 
 interface SentHistoryItem {
   id: string; timestamp: string; recipient: string;
@@ -29,10 +27,19 @@ interface KanbanTask {
   id: string;
   title: string;
   description: string;
-  status: 'todo' | 'in-progress' | 'done';
+  status: 'todo' | 'in-progress' | 'review' | 'done' | 'archived';
   priority: 'low' | 'medium' | 'high';
+  assignedTo: string | null;
+  createdBy: string | null;
   dueAt: string | null;
   createdAt: string;
+}
+
+interface AppUser {
+  id: string;
+  username: string;
+  full_name: string;
+  role: 'admin' | 'user';
 }
 
 const DOCK_APPS = [
@@ -40,15 +47,17 @@ const DOCK_APPS = [
   { type: 'kanban', label: 'Kanban Board', icon: Columns2, cssClass: 'kanban' },
   { type: 'sender', label: 'Email Sender', icon: Mail, cssClass: 'email' },
   { type: 'reports', label: 'Reports History', icon: FileText, cssClass: 'email' },
+  { type: 'users', label: 'User Management', icon: ShieldCheck, cssClass: 'users', adminOnly: true },
   { type: 'settings', label: 'Settings', icon: Settings, cssClass: 'settings' },
 ];
 
 const WINDOW_DEFAULTS: Record<string, { x: number; y: number; w: number; h: number }> = {
-  dashboard: { x: 80, y: 60, w: 960, h: 620 },
-  kanban: { x: 110, y: 75, w: 1000, h: 680 },
-  sender: { x: 140, y: 70, w: 1050, h: 660 },
-  reports: { x: 200, y: 90, w: 900, h: 560 },
-  settings: { x: 260, y: 100, w: 700, h: 480 },
+  dashboard: { x: 80, y: 32, w: 900, h: 580 },
+  kanban: { x: 110, y: 32, w: 940, h: 620 },
+  sender: { x: 140, y: 32, w: 860, h: 580 },
+  reports: { x: 170, y: 32, w: 880, h: 560 },
+  users: { x: 200, y: 32, w: 800, h: 540 },
+  settings: { x: 230, y: 32, w: 720, h: 520 },
 };
 
 const App: React.FC = () => {
@@ -70,10 +79,15 @@ const App: React.FC = () => {
   const [isSent, setIsSent] = useState(false);
   const [errorStatus, setErrorStatus] = useState<string | null>(null);
   const [sentHistory, setSentHistory] = useState<SentHistoryItem[]>([]);
-  const [isLoggedIn, setIsLoggedIn] = useState(localStorage.getItem('rising_tech_auth') === 'true');
+  const [currentUser, setCurrentUser] = useState<any>(() => {
+    const saved = localStorage.getItem('rising_tech_user');
+    return saved ? JSON.parse(saved) : null;
+  });
+  const isLoggedIn = !!currentUser;
   const [loginForm, setLoginForm] = useState({ username: '', password: '' });
   const [authError, setAuthError] = useState<string | null>(null);
   const [showLogin, setShowLogin] = useState(false);
+  const isAdmin = currentUser?.role === 'admin';
   const [clientComplaints, setClientComplaints] = useState<any[]>([]);
   const [clientForm, setClientForm] = useState({ name: '', email: '', address: '', problem: '', type: 'complaint', category: 'company' });
   const [complaintSubmitted, setComplaintSubmitted] = useState(false);
@@ -84,6 +98,25 @@ const App: React.FC = () => {
   const [aiError, setAiError] = useState<string | null>(null);
   const [currentTime, setCurrentTime] = useState(new Date());
   const [isTaskSubmitting, setIsTaskSubmitting] = useState(false);
+  const [allUsers, setAllUsers] = useState<AppUser[]>([]);
+  
+  // Appearance State
+  const [theme, setTheme] = useState<'light' | 'dark'>(() => (localStorage.getItem('rt_theme') as any) || 'dark');
+  const [wallpaper, setWallpaper] = useState(() => localStorage.getItem('rt_wallpaper') || 'linear-gradient(160deg, #0a0d14 0%, #0d1117 30%, #0f1520 60%, #0a0d14 100%)');
+  const [clockColor, setClockColor] = useState(() => localStorage.getItem('rt_clock_color') || '#ffffff');
+
+  useEffect(() => {
+    document.body.className = theme === 'light' ? 'light-mode' : '';
+    localStorage.setItem('rt_theme', theme);
+  }, [theme]);
+
+  useEffect(() => {
+    localStorage.setItem('rt_wallpaper', wallpaper);
+  }, [wallpaper]);
+
+  useEffect(() => {
+    localStorage.setItem('rt_clock_color', clockColor);
+  }, [clockColor]);
   
   // Kanban State
   const [kanbanTasks, setKanbanTasks] = useState<KanbanTask[]>(() => {
@@ -96,12 +129,30 @@ const App: React.FC = () => {
     ];
   });
   const [isTaskModalOpen, setIsTaskModalOpen] = useState(false);
-  const [newTask, setNewTask] = useState({ title: '', description: '', priority: 'medium' as const, status: 'todo' as const, dueAt: '' });
+  const [newTask, setNewTask] = useState({ title: '', description: '', priority: 'medium' as const, status: 'todo' as const, dueAt: '', assignedTo: '' });
+  const [kanbanAiGenerating, setKanbanAiGenerating] = useState(false);
+  const [kanbanView, setKanbanView] = useState<'board' | 'archive'>('board');
+  const [toolsHeight, setToolsHeight] = useState(240);
+  const [isResizingTools, setIsResizingTools] = useState(false);
 
   useEffect(() => {
     const t = setInterval(() => setCurrentTime(new Date()), 1000);
     return () => clearInterval(t);
   }, []);
+
+  useEffect(() => {
+    if (!isResizingTools) return;
+    const handleMouseMove = (e: MouseEvent) => {
+      setToolsHeight(prev => Math.max(120, Math.min(600, e.movementY + prev)));
+    };
+    const handleMouseUp = () => setIsResizingTools(false);
+    window.addEventListener('mousemove', handleMouseMove);
+    window.addEventListener('mouseup', handleMouseUp);
+    return () => {
+      window.removeEventListener('mousemove', handleMouseMove);
+      window.removeEventListener('mouseup', handleMouseUp);
+    };
+  }, [isResizingTools]);
 
   // --- DOCK ACTIONS ---
   const openApp = (type: string) => {
@@ -138,9 +189,42 @@ const App: React.FC = () => {
         if (mapped.length > 0 && !selectedReportId) setSelectedReportId(mapped[0].id);
       }
       const { data: tasks } = await supabase.from('kanban_tasks').select('*').order('created_at', { ascending: true });
-      if (tasks) setKanbanTasks(tasks.map(t => ({ id: t.id, title: t.title, description: t.description, status: t.status, priority: t.priority, dueAt: t.due_at, createdAt: t.created_at })));
+      if (tasks) {
+        const mappedTasks = tasks.map(t => ({ 
+          id: t.id, 
+          title: t.title, 
+          description: t.description, 
+          status: t.status as any, 
+          priority: t.priority as any, 
+          assignedTo: t.assigned_to, 
+          createdBy: t.created_by, 
+          dueAt: t.due_at, 
+          createdAt: t.created_at,
+          updatedAt: t.updated_at
+        }));
+        
+        // Auto-archive check
+        const now = new Date();
+        const updatedTasks = await Promise.all(mappedTasks.map(async t => {
+          if (t.status === 'done' && t.updatedAt) {
+            const doneDate = new Date(t.updatedAt);
+            if (now.getTime() - doneDate.getTime() > 24 * 60 * 60 * 1000) {
+              await supabase.from('kanban_tasks').update({ status: 'archived' }).eq('id', t.id);
+              return { ...t, status: 'archived' as const };
+            }
+          }
+          return t;
+        }));
+        
+        setKanbanTasks(updatedTasks);
+      }
+      
+      if (currentUser?.role === 'admin') {
+        const { data: users } = await supabase.from('app_users').select('id, username, full_name, role');
+        if (users) setAllUsers(users);
+      }
     } catch (err) { console.error('Fetch Error:', err); }
-  }, [selectedReportId]);
+  }, [selectedReportId, currentUser]);
 
   useEffect(() => {
     if (isLoggedIn) fetchSupabaseData();
@@ -179,13 +263,45 @@ const App: React.FC = () => {
           const t = payload.new;
           setKanbanTasks(prev => {
             if (prev.some(task => task.id === t.id)) return prev;
-            return [...prev, { id: t.id, title: t.title, description: t.description, status: t.status, priority: t.priority, dueAt: t.due_at, createdAt: t.created_at }];
+            return [...prev, { id: t.id, title: t.title, description: t.description, status: t.status, priority: t.priority, assignedTo: t.assigned_to, createdBy: t.created_by, dueAt: t.due_at, createdAt: t.created_at }];
           });
         } else if (payload.eventType === 'UPDATE') {
           const t = payload.new;
-          setKanbanTasks(prev => prev.map(old => old.id === t.id ? { id: t.id, title: t.title, description: t.description, status: t.status, priority: t.priority, dueAt: t.due_at, createdAt: t.created_at } : old));
+          setKanbanTasks(prev => prev.map(old => old.id === t.id ? { id: t.id, title: t.title, description: t.description, status: t.status, priority: t.priority, assignedTo: t.assigned_to, createdBy: t.created_by, dueAt: t.due_at, createdAt: t.created_at } : old));
         } else if (payload.eventType === 'DELETE') {
           setKanbanTasks(prev => prev.filter(old => old.id !== payload.old.id));
+        }
+      })
+      .subscribe();
+    return () => { supabase.removeChannel(channel); };
+  }, [isLoggedIn]);
+
+  // Real-time updates for email logs (History)
+  useEffect(() => {
+    if (!isLoggedIn) return;
+    const channel = supabase
+      .channel('public:email_logs')
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'email_logs' }, (payload) => {
+        const l = payload.new;
+        const newLog = { id: l.id, timestamp: new Date(l.created_at).toLocaleString(), recipient: l.recipient_email, complainantName: l.complainant_name, problem: l.problem, status: l.status as any };
+        setSentHistory(prev => [newLog, ...prev]);
+      })
+      .subscribe();
+    return () => { supabase.removeChannel(channel); };
+  }, [isLoggedIn]);
+
+  // Real-time updates for reports (Templates)
+  useEffect(() => {
+    if (!isLoggedIn) return;
+    const channel = supabase
+      .channel('public:reports')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'reports' }, (payload) => {
+        if (payload.eventType === 'INSERT') {
+          const r = payload.new;
+          const rep = { id: r.id, problem: r.problem, description: r.description, possibleError: r.possible_error, suggestedSolution: r.suggested_solution, frequency: r.frequency, estimatedCost: r.estimated_cost, icon: r.icon, isCustom: true };
+          setDynamicReports(prev => [rep, ...prev]);
+        } else if (payload.eventType === 'DELETE') {
+          setDynamicReports(prev => prev.filter(r => r.id !== payload.old.id));
         }
       })
       .subscribe();
@@ -214,18 +330,29 @@ const App: React.FC = () => {
     if (!apiKey || apiKey === 'YOUR_GEMINI_API_KEY_HERE') { setAiError('Gemini API key not configured.'); setTimeout(() => setAiError(null), 5000); return; }
     setIsAiGenerating(true); setAiError(null);
     try {
-      const prompt = `You are an expert IT Solution Architect at "Rising Tech Innovations". Analyze: "${newReport.problem.trim()}"\nIf tech PROBLEM: generate JSON with description, possibleError, suggestedSolution, estimatedCost (PHP), frequency.\nIf WEBSITE/PROJECT: generate JSON with description, possibleError (features), suggestedSolution (roadmap), estimatedCost (PHP), frequency (dev time).\nRespond ONLY with strict JSON.`;
-      const models = ['gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-2.0-flash'];
+      const prompt = `You are an expert IT Solution Architect at "Rising Tech Innovations". Analyze: "${newReport.problem.trim()}" and provide a JSON response with description, possibleError, suggestedSolution, estimatedCost (PHP), and frequency. Respond ONLY with valid JSON.`;
+      const models = ['gemini-1.5-flash', 'gemini-1.5-pro'];
       let text = '', lastErr = '';
       for (const m of models) {
         try {
-          const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${m}:generateContent?key=${apiKey}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }], generationConfig: { temperature: 0.7, maxOutputTokens: 1024 } }) });
-          if (!res.ok) { lastErr = (await res.json()).error?.message || `HTTP ${res.status}`; continue; }
-          text = (await res.json()).candidates?.[0]?.content?.parts?.[0]?.text || '';
+          const res = await fetch(`https://generativelanguage.googleapis.com/v1/models/${m}:generateContent?key=${apiKey}`, { 
+            method: 'POST', 
+            headers: { 'Content-Type': 'application/json' }, 
+            body: JSON.stringify({ 
+              contents: [{ role: 'user', parts: [{ text: prompt }] }]
+            }) 
+          });
+          const result = await res.json();
+          if (!res.ok) { 
+            lastErr = result.error?.message || `HTTP ${res.status}`;
+            console.error(`Gemini Error (${m}):`, result.error || result);
+            continue; 
+          }
+          text = result.candidates?.[0]?.content?.parts?.[0]?.text || '';
           if (text) break;
         } catch (e: any) { lastErr = e.message; }
       }
-      if (!text) throw new Error(lastErr || 'All models failed.');
+      if (!text) throw new Error(lastErr || 'AI generation failed.');
       const parsed = JSON.parse(text.replace(/^```json\s*/i, '').replace(/^```\s*/i, '').replace(/\s*```$/i, ''));
       setNewReport(p => ({ ...p, description: parsed.description || p.description, possibleError: parsed.possibleError || p.possibleError, suggestedSolution: parsed.suggestedSolution || p.suggestedSolution, frequency: parsed.frequency || p.frequency, estimatedCost: parsed.estimatedCost || p.estimatedCost }));
     } catch (err: any) {
@@ -238,10 +365,62 @@ const App: React.FC = () => {
   const IconMap: Record<string, any> = { MonitorOff, WifiOff, AppWindow, Zap };
 
   // --- AUTH ---
-  const handleLogin = (e: React.FormEvent) => { e.preventDefault(); if (loginForm.username === 'risingtech' && loginForm.password === 'rising@tech@innovations') { setIsLoggedIn(true); localStorage.setItem('rising_tech_auth', 'true'); setAuthError(null); } else { setAuthError('Access Denied.'); setTimeout(() => setAuthError(null), 3000); } };
+  const handleLogin = async (e: React.FormEvent) => { 
+    e.preventDefault(); 
+    setAuthError(null);
+    
+    try {
+      const { data, error } = await supabase
+        .from('app_users')
+        .select('*')
+        .ilike('username', loginForm.username)
+        .eq('password', loginForm.password) 
+        .eq('is_active', true)
+        .single();
+
+      if (error) {
+        if (error.code === 'PGRST116') { // No rows found
+          setAuthError('Invalid username or password.');
+        } else if (error.message.includes('relation "public.app_users" does not exist')) {
+          setAuthError('Database Table Error: Please run the SQL schema in your Supabase dashboard.');
+        } else {
+          setAuthError(`Database Error: ${error.message}`);
+        }
+        console.error('Login Error:', error);
+        setTimeout(() => setAuthError(null), 5000);
+        return;
+      }
+
+      if (!data) {
+        setAuthError('Access Denied. Invalid credentials.');
+        setTimeout(() => setAuthError(null), 3000);
+        return;
+      }
+
+      const userInfo = {
+        id: data.id,
+        username: data.username,
+        full_name: data.full_name,
+        role: data.role
+      };
+
+      setCurrentUser(userInfo);
+      localStorage.setItem('rising_tech_user', JSON.stringify(userInfo));
+      
+      // Seed update
+      await supabase
+        .from('app_users')
+        .update({ last_login: new Date().toISOString() })
+        .eq('id', data.id);
+
+    } catch (err) {
+      setAuthError('Connection error.');
+    }
+  };
+
   const handleLogout = () => { 
-    setIsLoggedIn(false); 
-    localStorage.removeItem('rising_tech_auth'); 
+    setCurrentUser(null); 
+    localStorage.removeItem('rising_tech_user'); 
     localStorage.removeItem('rising_tech_windows');
     localStorage.removeItem('rising_tech_focused_window');
     setOpenWindows([]); 
@@ -320,9 +499,48 @@ const App: React.FC = () => {
     setNewReport({ problem: '', description: '', possibleError: '', suggestedSolution: '', frequency: '90%', estimatedCost: 'Free / Internal IT', sendImmediately: false, targetEmail: '', targetName: '' });
   };
 
+  const createDesktopShortcut = () => {
+    const url = window.location.href;
+    const shortcutContent = `[InternetShortcut]\nURL=${url}\nIconIndex=0`;
+    const blob = new Blob([shortcutContent], { type: 'text/plain' });
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(blob);
+    link.download = 'RisingTech_Portal.url';
+    link.click();
+    URL.revokeObjectURL(link.href);
+    
+    setIsSent(true); // Reuse transmission toast for feedback
+    alert("Shortcut file downloaded. Move it to your Desktop or Tablet storage!");
+  };
+
   // ===================== RENDERERS =====================
 
   // --- KANBAN ACTIONS ---
+  const handleKanbanAiSuggest = async () => {
+    if (!newTask.title.trim()) return;
+    const apiKey = import.meta.env.VITE_GEMINI_API_KEY;
+    if (!apiKey) return;
+    setKanbanAiGenerating(true);
+    try {
+      const prompt = `Based on the task title "${newTask.title}", write a 1-sentence professional description. Response should be plain text.`;
+      const res = await fetch(`https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key=${apiKey}`, { 
+        method: 'POST', 
+        headers: { 'Content-Type': 'application/json' }, 
+        body: JSON.stringify({ 
+          contents: [{ role: 'user', parts: [{ text: prompt }] }]
+        }) 
+      });
+      const data = await res.json();
+      if (res.ok) {
+        const text = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
+        if (text) setNewTask(prev => ({ ...prev, description: text.trim() }));
+      } else {
+        console.error('Kanban AI Error Details:', data.error || data);
+      }
+    } catch (err) { console.error('Kanban AI Error:', err); }
+    finally { setKanbanAiGenerating(false); }
+  };
+
   const addTask = async () => {
     if (!newTask.title.trim() || isTaskSubmitting) return;
     setIsTaskSubmitting(true);
@@ -332,6 +550,8 @@ const App: React.FC = () => {
         description: newTask.description,
         status: newTask.status,
         priority: newTask.priority,
+        assigned_to: newTask.assignedTo || currentUser?.id,
+        created_by: currentUser?.id,
         due_at: newTask.dueAt || null
       }]).select();
 
@@ -346,6 +566,8 @@ const App: React.FC = () => {
           description: t.description, 
           status: t.status, 
           priority: t.priority, 
+          assignedTo: t.assigned_to,
+          createdBy: t.created_by,
           dueAt: t.due_at,
           createdAt: t.created_at 
         };
@@ -358,7 +580,7 @@ const App: React.FC = () => {
       }
 
       setIsTaskModalOpen(false);
-      setNewTask({ title: '', description: '', priority: 'medium', status: 'todo', dueAt: '' });
+      setNewTask({ title: '', description: '', priority: 'medium', status: 'todo', dueAt: '', assignedTo: '' });
     } catch (err) { 
       console.error('Add Task Error:', err);
       alert('Failed to add task. Please ensure you have run the SQL schema in your Supabase dashboard.');
@@ -367,12 +589,46 @@ const App: React.FC = () => {
     }
   };
 
-  const moveTask = async (id: string, newStatus: 'todo' | 'in-progress' | 'done') => {
+  const moveTask = async (id: string, newStatus: 'todo' | 'in-progress' | 'review' | 'done' | 'archived') => {
+    const task = kanbanTasks.find(t => t.id === id);
+    if (!task) return;
+
+    // Permissions check:
+    // 1. Task given by admin (createdBy is admin) -> only admin can manage (move/edit/delete)
+    // 2. User's own task (createdBy == assignedTo == user) -> admin cannot manage
+    
+    const taskCreator = allUsers.find(u => u.id === task.createdBy);
+    const isTaskFromAdmin = taskCreator?.role === 'admin';
+    const isOtherUserTask = task.createdBy === task.assignedTo && task.assignedTo !== currentUser?.id;
+
+    if (isAdmin) {
+      // If it's another user's own task, admin can't manage
+      if (isOtherUserTask) {
+        alert("You cannot manage this user's personal task.");
+        return;
+      }
+    } else {
+      // Non-admin logic:
+      if (isTaskFromAdmin) {
+        // If task was given by admin, user can only move between specific statuses
+        if (newStatus === 'done' || newStatus === 'archived') {
+           alert("Only Admin can complete or archive this task."); 
+           return;
+        }
+      } else {
+        // If it's NOT from admin, only the creator can control it
+        if (task.createdBy !== currentUser?.id) {
+          alert("Only the task creator can manage this task.");
+          return;
+        }
+      }
+    }
+
     try {
       // Optimistic Update
       setKanbanTasks(prev => prev.map(t => t.id === id ? { ...t, status: newStatus } : t));
       
-      const { error } = await supabase.from('kanban_tasks').update({ status: newStatus }).eq('id', id);
+      const { error } = await supabase.from('kanban_tasks').update({ status: newStatus, updated_at: new Date().toISOString() }).eq('id', id);
       if (error) throw error;
     } catch (err) { console.error('Move Task Error:', err); }
   };
@@ -394,7 +650,7 @@ const App: React.FC = () => {
     e.dataTransfer.dropEffect = 'move';
   };
 
-  const handleDrop = (e: React.DragEvent, status: 'todo' | 'in-progress' | 'done') => {
+  const handleDrop = (e: React.DragEvent, status: 'todo' | 'in-progress' | 'review' | 'done') => {
     e.preventDefault();
     const taskId = e.dataTransfer.getData('taskId');
     if (taskId) {
@@ -403,28 +659,124 @@ const App: React.FC = () => {
   };
 
   const deleteTask = async (id: string) => {
+    const task = kanbanTasks.find(t => t.id === id);
+    if (!task) return;
+
+    if (isAdmin) {
+      if (task.createdBy === task.assignedTo && task.assignedTo !== currentUser?.id) {
+        alert("You cannot delete this user's personal task.");
+        return;
+      }
+    } else {
+      // If not admin:
+      const taskCreator = allUsers.find(u => u.id === task.createdBy);
+      if (taskCreator?.role === 'admin') {
+        alert("Only admins can delete tasks they assigned.");
+        return;
+      }
+      if (task.createdBy !== currentUser?.id) {
+        alert("You can only delete tasks you created.");
+        return;
+      }
+    }
+
     try {
       await supabase.from('kanban_tasks').delete().eq('id', id);
     } catch (err) { console.error('Delete Task Error:', err); }
   };
 
+  const renderArchive = () => {
+    const archivedTasks = kanbanTasks.filter(t => t.status === 'archived');
+
+    return (
+      <div className="animate-fade-in kanban-container">
+        <div className="content-header">
+          <div className="title-group">
+            <h1>Activity Archive</h1>
+            <p>Historical record of completed and verified tasks.</p>
+          </div>
+          <div className="segmented-control">
+            <button className={kanbanView === 'board' ? 'active' : ''} onClick={() => setKanbanView('board')}>Board</button>
+            <button className={kanbanView === 'archive' ? 'active' : ''} onClick={() => setKanbanView('archive')}>Archive</button>
+          </div>
+        </div>
+
+        <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
+          {archivedTasks.length > 0 ? (
+            <div className="history-table-container">
+              <table className="history-table">
+                <thead>
+                  <tr>
+                    <th>Task Name</th>
+                    <th>Assignee</th>
+                    <th>Due Date</th>
+                    <th>Status</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {archivedTasks.map(task => {
+                    const assignee = allUsers.find(u => u.id === task.assignedTo);
+                    const isOverdue = task.dueAt && new Date(task.dueAt) < new Date();
+                    return (
+                      <tr key={task.id}>
+                        <td style={{ fontWeight: 600 }}>{task.title}</td>
+                        <td>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                            <div className="task-assignee-mini">{assignee?.full_name.split(' ').map(n => n[0]).join('')}</div>
+                            <span>{assignee?.full_name || 'Unassigned'}</span>
+                          </div>
+                        </td>
+                        <td style={{ color: isOverdue ? '#f87171' : 'inherit', fontWeight: isOverdue ? 600 : 400 }}>
+                          {task.dueAt ? new Date(task.dueAt).toLocaleString() : 'No Due Date'}
+                          {isOverdue && <span style={{ marginLeft: '8px', fontSize: '0.7rem' }}>(OVERDUE)</span>}
+                        </td>
+                        <td><span className="status-badge status-success">ARCHIVED</span></td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            <div style={{ padding: '4rem', textAlign: 'center', color: 'var(--text-muted)' }}>
+              <Clock size={48} style={{ opacity: 0.1, marginBottom: '1rem' }} />
+              <p>No archived tasks yet.</p>
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  };
+
   const renderKanban = () => {
-    const columns: { id: 'todo' | 'in-progress' | 'done', label: string, icon: any, color: string }[] = [
+    const columns: { id: 'todo' | 'in-progress' | 'review' | 'done', label: string, icon: any, color: string }[] = [
       { id: 'todo', label: 'To Do', icon: Clock, color: 'var(--text-muted)' },
-      { id: 'in-progress', label: 'In Progress', icon: Loader2, color: 'var(--accent-primary)' },
-      { id: 'done', label: 'Completed', icon: CheckCircle, color: '#10b981' }
+      { id: 'in-progress', label: 'Working', icon: Loader2, color: 'var(--accent-primary)' },
+      { id: 'review', label: 'Review', icon: ShieldCheck, color: 'var(--accent-secondary)' },
+      { id: 'done', label: 'Done', icon: CheckCircle, color: '#10b981' }
     ];
+
+    const isBoard = kanbanView === 'board';
+    const isArchive = kanbanView === 'archive';
+
+    if (isArchive) return renderArchive();
 
     return (
       <div className="animate-fade-in kanban-container">
         <div className="content-header">
           <div className="title-group">
             <h1>Project Kanban</h1>
-            <p>Manage your technical tasks and milestones.</p>
+            <p>Manage and verify team progress.</p>
           </div>
-          <button className="btn-primary" onClick={() => setIsTaskModalOpen(true)}>
-            <Plus size={16} /> New Task
-          </button>
+          <div style={{ display: 'flex', gap: '8px' }}>
+            <div className="segmented-control">
+              <button className={isBoard ? 'active' : ''} onClick={() => setKanbanView('board')}>Board</button>
+              <button className={isArchive ? 'active' : ''} onClick={() => setKanbanView('archive')}>Archive</button>
+            </div>
+            <button className="btn-primary" onClick={() => setIsTaskModalOpen(true)}>
+              <Plus size={16} /> New Task
+            </button>
+          </div>
         </div>
 
         <div className="kanban-board">
@@ -462,12 +814,17 @@ const App: React.FC = () => {
                       className={`kanban-card${task.status === 'done' ? ' task-completed' : ''}`}
                     >
                       <div className="card-top">
-                        {task.status === 'done' ? (
-                          <span className="priority-badge" style={{ background: 'rgba(16, 185, 129, 0.15)', color: '#10b981' }}>Completed</span>
-                        ) : (
-                          <span className={`priority-badge ${task.priority}`}>{task.priority}</span>
-                        )}
+                          {task.status === 'done' ? (
+                            <span className="priority-badge" style={{ background: 'rgba(16, 185, 129, 0.15)', color: '#10b981' }}>Verified</span>
+                          ) : (
+                            <span className={`priority-badge ${task.priority}`}>{task.priority}</span>
+                          )}
                         <div className="card-actions">
+                          {task.assignedTo && (
+                            <div className="task-assignee-mini" title={allUsers.find(u => u.id === task.assignedTo)?.full_name}>
+                              {allUsers.find(u => u.id === task.assignedTo)?.full_name.split(' ').map(n => n[0]).join('')}
+                            </div>
+                          )}
                           <button onClick={(e) => { e.stopPropagation(); deleteTask(task.id); }} className="action-btn delete"><Trash2 size={12} /></button>
                         </div>
                       </div>
@@ -490,6 +847,13 @@ const App: React.FC = () => {
                           </span>
                         </div>
                       </div>
+
+                      {task.status === 'review' && isAdmin && (
+                        <div className="review-actions">
+                          <button className="review-btn accept" onClick={() => moveTask(task.id, 'done')}>Accept</button>
+                          <button className="review-btn reject" onClick={() => moveTask(task.id, 'in-progress')}>Reject</button>
+                        </div>
+                      )}
                     </motion.div>
                   </div>
                 ))}
@@ -546,22 +910,122 @@ const App: React.FC = () => {
     </div>
   );
 
-  const createDesktopShortcut = () => {
-    const url = window.location.origin;
-    const shortcutContent = `[InternetShortcut]\nURL=${url}\n`;
-    const blob = new Blob([shortcutContent], { type: 'text/plain' });
-    const link = document.createElement('a');
-    link.href = URL.createObjectURL(blob);
-    link.download = 'Rising Tech.url';
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
+
+  const WALLPAPERS = [
+    { id: 'default', value: 'linear-gradient(160deg, #0a0d14 0%, #0d1117 30%, #0f1520 60%, #0a0d14 100%)', label: 'Space' },
+    { id: 'sunset', value: 'linear-gradient(135deg, #fceabb 0%, #f8b500 100%)', label: 'Sunset' },
+    { id: 'ocean', value: 'linear-gradient(135deg, #2bc0e4 0%, #eaecc6 100%)', label: 'Ocean' },
+    { id: 'nordic', value: 'linear-gradient(135deg, #2c3e50 0%, #000000 100%)', label: 'Nordic' },
+    { id: 'macos-light', value: 'url(https://images.unsplash.com/photo-1614850523296-d8c1af93d400?q=80&w=2070&auto=format&fit=crop)', label: 'Abstract' },
+    { id: 'macos-dark', value: 'url(https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?q=80&w=1964&auto=format&fit=crop)', label: 'Dynamic' },
+    { id: 'premium', value: 'linear-gradient(to right, #243b55, #141e30)', label: 'Premium' },
+  ];
+
+  const handleWallpaperUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      const reader = new FileReader();
+      reader.onload = (event) => {
+        if (event.target?.result) {
+          setWallpaper(`url(${event.target.result})`);
+        }
+      };
+      reader.readAsDataURL(file);
+    }
   };
 
   const renderSettings = () => (
     <div className="animate-fade-in">
-      <div className="content-header"><div className="title-group"><h1>Configuration</h1><p>Manage connections and profile.</p></div></div>
+      <div className="content-header"><div className="title-group"><h1>Configuration</h1><p>Manage connection and appearance.</p></div></div>
+      
       <div className="card">
+        <h3>Desktop & Tablet Integration</h3>
+        <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginBottom: '1.5rem' }}>
+          Download a shortcut file to access this portal directly from your real computer desktop or tablet.
+        </p>
+        <button className="btn-primary" onClick={createDesktopShortcut} style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+          <Zap size={16} /> Download Desktop Shortcut
+        </button>
+      </div>
+
+      <div className="card" style={{ marginTop: '1.5rem' }}>
+        <h3>Appearance</h3>
+        <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginTop: '0.3rem' }}>Configure system-wide visual styles.</p>
+        
+        <div className="appearance-grid">
+          <div className={`theme-card ${theme === 'light' ? 'active' : ''}`} onClick={() => setTheme('light')}>
+            <div className="theme-preview">
+              <div className="preview-win">
+                <div className="preview-bar" />
+                <div style={{ flex: 1, padding: '4px' }}><div style={{ width: '40%', height: '4px', background: '#e2e8f0', borderRadius: '2px' }} /></div>
+              </div>
+            </div>
+            <span className="theme-label">Light</span>
+          </div>
+
+          <div className={`theme-card dark-mode-preview ${theme === 'dark' ? 'active' : ''}`} onClick={() => setTheme('dark')}>
+            <div className="theme-preview">
+              <div className="preview-win">
+                <div className="preview-bar" style={{ borderColor: 'rgba(255,255,255,0.05)' }} />
+                <div style={{ flex: 1, padding: '4px' }}><div style={{ width: '40%', height: '4px', background: 'rgba(255,255,255,0.05)', borderRadius: '2px' }} /></div>
+              </div>
+            </div>
+            <span className="theme-label">Dark</span>
+          </div>
+        </div>
+
+        <div style={{ marginTop: '1.5rem' }}>
+          <label style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--text-secondary)' }}>Desktop Clock Color</label>
+          <div style={{ display: 'flex', gap: '10px', marginTop: '0.75rem' }}>
+            {['#ffffff', '#000000', '#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#d946ef'].map(color => (
+              <div 
+                key={color} 
+                onClick={() => setClockColor(color)}
+                style={{ 
+                  width: '28px', 
+                  height: '28px', 
+                  borderRadius: '50%', 
+                  background: color, 
+                  cursor: 'pointer',
+                  border: clockColor === color ? '2px solid var(--accent-primary)' : '2px solid transparent',
+                  boxShadow: clockColor === color ? '0 0 0 2px rgba(59, 130, 246, 0.2)' : 'none',
+                  transition: 'all 0.2s'
+                }}
+              />
+            ))}
+          </div>
+        </div>
+
+        <div style={{ marginTop: '1.5rem' }}>
+          <label style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--text-secondary)' }}>Desktop Wallpaper</label>
+          <div className="wallpaper-grid">
+            <div className="wallpaper-thumb photo-btn" onClick={() => document.getElementById('wallpaper-input')?.click()}>
+              <Plus size={20} />
+              <input type="file" id="wallpaper-input" hidden accept="image/*" onChange={handleWallpaperUpload} />
+            </div>
+            
+            {/* Show custom uploaded wallpaper if active and not a preset */}
+            {wallpaper.startsWith('url(data:') && (
+              <div 
+                className="wallpaper-thumb active"
+                style={{ background: wallpaper }}
+                title="Custom Photo"
+              />
+            )}
+
+            {WALLPAPERS.map(wp => (
+              <div 
+                key={wp.id} 
+                className={`wallpaper-thumb ${wallpaper === wp.value ? 'active' : ''}`}
+                style={{ background: wp.value }}
+                onClick={() => setWallpaper(wp.value)}
+              />
+            ))}
+          </div>
+        </div>
+      </div>
+
+      <div className="card" style={{ marginTop: '1.5rem' }}>
         <h3>System Connectivity</h3>
         <div style={{ padding: '1.25rem', background: 'rgba(16, 185, 129, 0.05)', borderRadius: '12px', border: '1px solid rgba(16, 185, 129, 0.2)', display: 'flex', alignItems: 'center', gap: '1.25rem', marginTop: '1rem' }}>
           <div style={{ width: '36px', height: '36px', background: 'rgba(16, 185, 129, 0.1)', borderRadius: '50%', display: 'grid', placeItems: 'center' }}><CheckCircle size={20} style={{ color: '#10b981' }} /></div>
@@ -579,6 +1043,7 @@ const App: React.FC = () => {
 
       <div className="card" style={{ marginTop: '1.5rem' }}>
         <h3>Account</h3>
+        <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginTop: '0.2rem' }}>Logged in as {currentUser?.full_name} ({currentUser?.role})</p>
         <button className="btn-primary" style={{ marginTop: '1rem', background: 'rgba(239,68,68,0.15)', boxShadow: 'none', color: '#f87171' }} onClick={handleLogout}><LogOut size={16} /> Logout</button>
       </div>
     </div>
@@ -593,7 +1058,7 @@ const App: React.FC = () => {
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: '#10b981' }}><CheckCircle size={16} /><span>Online</span></div>
         </div>
       </div>
-      <section style={{ marginTop: '1.5rem' }}>
+      <section style={{ height: `${toolsHeight}px`, overflowY: 'auto', marginBottom: '8px' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
           <h2 style={{ fontSize: '1.15rem' }}>Problem Type</h2>
           <button className="btn-primary" style={{ padding: '0.5rem 1rem', fontSize: '0.85rem' }} onClick={() => setIsModalOpen(true)}><Zap size={14} /> Add Report</button>
@@ -606,7 +1071,13 @@ const App: React.FC = () => {
             </motion.div>); })}
         </div>
       </section>
-      <div className="editor-layout" style={{ marginTop: '1.5rem' }}>
+
+      <div 
+        className="section-divider-h" 
+        onMouseDown={() => setIsResizingTools(true)}
+      />
+
+      <div className="editor-layout" style={{ marginTop: '0.5rem' }}>
         <div className="card">
           <h2 style={{ marginBottom: '1.25rem', display: 'flex', alignItems: 'center', gap: '8px', fontSize: '1.1rem' }}><Mail size={18} className="text-accent" /> Compose</h2>
           <div className="input-group"><label>Complainant Name <span style={{ color: '#f87171' }}>*</span></label><input type="text" className="terminal-input" value={complainantName} onChange={e => setComplainantName(e.target.value)} placeholder="Enter full name" /></div>
@@ -641,6 +1112,7 @@ const App: React.FC = () => {
       case 'dashboard': return renderDashboard();
       case 'kanban': return renderKanban();
       case 'reports': return renderHistory();
+      case 'users': return isAdmin ? <UserManagement currentUserId={currentUser?.id} /> : <div className="card">Unauthorized Access</div>;
       case 'settings': return renderSettings();
       default: return renderSender();
     }
@@ -714,11 +1186,11 @@ const App: React.FC = () => {
               <form onSubmit={handleLandingSubmit}>
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
                   <div className="input-group"><label>Full Name *</label><input type="text" className="terminal-input" required value={clientForm.name} onChange={e => setClientForm({ ...clientForm, name: e.target.value })} placeholder="John Doe" /></div>
-                  <div className="input-group"><label>Category</label><select className="terminal-input" value={clientForm.category} onChange={e => setClientForm({ ...clientForm, category: e.target.value })} style={{ height: '42px', background: 'rgba(255,255,255,0.02)', border: '1px solid var(--glass-border)', color: 'white' }}><option value="student" style={{ background: '#0f172a' }}>🎓 Student</option><option value="organization" style={{ background: '#0f172a' }}>🏛️ Organization</option><option value="company" style={{ background: '#0f172a' }}>🏢 Company</option></select></div>
+                  <div className="input-group"><label>Category</label><select className="terminal-input" value={clientForm.category} onChange={e => setClientForm({ ...clientForm, category: e.target.value })} style={{ height: '42px' }}><option value="student" className="select-option">🎓 Student</option><option value="organization" className="select-option">🏛️ Organization</option><option value="company" className="select-option">🏢 Company</option></select></div>
                 </div>
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
                   <div className="input-group"><label>Email *</label><input type="email" className="terminal-input" required value={clientForm.email} onChange={e => setClientForm({ ...clientForm, email: e.target.value })} placeholder="john@company.com" /></div>
-                  <div className="input-group"><label>Type</label><select className="terminal-input" value={clientForm.type} onChange={e => setClientForm({ ...clientForm, type: e.target.value })} style={{ height: '42px', background: 'rgba(255,255,255,0.02)', border: '1px solid var(--glass-border)', color: 'white' }}><option value="complaint" style={{ background: '#0f172a' }}>🔧 Tech Support</option><option value="website" style={{ background: '#0f172a' }}>🌐 Website</option></select></div>
+                  <div className="input-group"><label>Type</label><select className="terminal-input" value={clientForm.type} onChange={e => setClientForm({ ...clientForm, type: e.target.value })} style={{ height: '42px' }}><option value="complaint" className="select-option">🔧 Tech Support</option><option value="website" className="select-option">🌐 Website</option></select></div>
                 </div>
                 <div className="input-group"><label>{clientForm.type === 'website' ? 'Requirements' : 'Problem'} *</label><textarea className="terminal-input" required value={clientForm.problem} onChange={e => setClientForm({ ...clientForm, problem: e.target.value })} placeholder={clientForm.type === 'website' ? 'Describe your project...' : 'Describe the issue...'} style={{ height: '90px' }} /></div>
                 <button type="submit" className="btn-primary" style={{ width: '100%', justifyContent: 'center' }}>{clientForm.type === 'website' ? 'Get Proposal' : 'Submit Request'}</button>
@@ -732,7 +1204,7 @@ const App: React.FC = () => {
   );
 
   const renderLogin = () => (
-    <div className="modal-backdrop" style={{ background: 'rgba(5,7,10,0.85)' }} onClick={e => { if (e.target === e.currentTarget) setShowLogin(false); }}>
+    <div className="modal-backdrop" onClick={e => { if (e.target === e.currentTarget) setShowLogin(false); }}>
       <div className="card animate-fade-in" style={{ width: '100%', maxWidth: '400px', padding: '3rem', position: 'relative' }}>
         <button onClick={() => setShowLogin(false)} style={{ position: 'absolute', top: '15px', right: '15px', background: 'transparent', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer', fontSize: '1.2rem' }}>✕</button>
         <div style={{ textAlign: 'center', marginBottom: '2.5rem' }}><img src="/logo.png" alt="Logo" style={{ height: '80px', margin: '0 auto 1.5rem' }} /><h2 style={{ fontSize: '1.75rem', marginBottom: '0.5rem' }}>Terminal Access</h2><p style={{ color: 'var(--text-secondary)' }}>Rising Tech Innovation Hub</p></div>
@@ -769,7 +1241,8 @@ const App: React.FC = () => {
 
       {/* Desktop Area */}
       <div className="desktop-area">
-        <div className="desktop-clock">
+        <div className="macos-desktop" style={{ background: wallpaper, backgroundSize: 'cover', backgroundPosition: 'center' }} />
+        <div className="desktop-clock" style={{ color: clockColor }}>
           <div className="time">{currentTime.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false })}</div>
           <div className="date">{currentTime.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })}</div>
         </div>
@@ -854,7 +1327,20 @@ const App: React.FC = () => {
                 />
               </div>
               <div className="input-group">
-                <label>Description</label>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <label>Description</label>
+                  {newTask.title.trim() && (
+                    <button 
+                      type="button" 
+                      onClick={handleKanbanAiSuggest} 
+                      disabled={kanbanAiGenerating}
+                      style={{ background: 'none', border: 'none', color: '#a78bfa', fontSize: '0.75rem', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '4px', cursor: 'pointer', padding: '2px 8px' }}
+                    >
+                      {kanbanAiGenerating ? <Loader2 size={12} className="animate-spin" /> : <Sparkles size={12} />}
+                      AI Suggest
+                    </button>
+                  )}
+                </div>
                 <textarea 
                   className="terminal-input" 
                   placeholder="Add more details..." 
@@ -885,10 +1371,27 @@ const App: React.FC = () => {
                   >
                     <option value="todo">To Do</option>
                     <option value="in-progress">In Progress</option>
+                    <option value="review">Needs Review</option>
                     <option value="done">Done</option>
                   </select>
                 </div>
               </div>
+
+              {isAdmin && (
+                <div className="input-group">
+                  <label>Assign To</label>
+                  <select 
+                    className="terminal-input"
+                    value={newTask.assignedTo}
+                    onChange={e => setNewTask({...newTask, assignedTo: e.target.value})}
+                  >
+                    <option value="">Myself</option>
+                    {allUsers.filter(u => u.id !== currentUser?.id).map(user => (
+                      <option key={user.id} value={user.id}>{user.full_name} (@{user.username})</option>
+                    ))}
+                  </select>
+                </div>
+              )}
               <div className="input-group">
                 <label>Due Date & Time (Required)</label>
                 <input 
@@ -916,7 +1419,7 @@ const App: React.FC = () => {
 
       {/* macOS Dock */}
       <div className="macos-dock">
-        {DOCK_APPS.map((app, i) => {
+        {DOCK_APPS.filter(app => !(app as any).adminOnly || isAdmin).map((app, i) => {
           const isOpen = openWindows.some(w => w.type === app.type);
           return (
             <React.Fragment key={app.type}>
