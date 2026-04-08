@@ -1398,7 +1398,17 @@ const App: React.FC = () => {
 
       {/* Desktop Area */}
       <div className="desktop-area">
-        <div className="macos-desktop" style={{ background: wallpaper, backgroundSize: 'cover', backgroundPosition: 'center' }} />
+        <div 
+          className="macos-desktop" 
+          style={{ 
+            background: wallpaper, 
+            backgroundSize: 'cover', 
+            backgroundPosition: 'center',
+            backgroundRepeat: 'no-repeat',
+            position: 'absolute',
+            inset: 0
+          }} 
+        />
         <div className="desktop-clock" style={{ color: clockColor }}>
           <div className="time">{currentTime.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false })}</div>
           <div className="date">{currentTime.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })}</div>
@@ -1576,7 +1586,7 @@ const App: React.FC = () => {
       </AnimatePresence>
 
       {/* macOS Dock */}
-      <div className="macos-dock">
+      <div className={`macos-dock ${openWindows.some(w => w.fullscreen && !w.minimized) ? 'dock-hidden' : ''}`}>
         {DOCK_APPS.filter(app => !(app as any).adminOnly || isAdmin).map((app, i) => {
           const isOpen = openWindows.some(w => w.type === app.type);
           return (
