@@ -180,6 +180,8 @@ const App: React.FC = () => {
   const [isResizingTools, setIsResizingTools] = useState(false);
   const [messengerMessages, setMessengerMessages] = useState<any[]>([]);
   const [messengerInput, setMessengerInput] = useState('');
+  const [isListening, setIsListening] = useState(false);
+  const recognitionRef = useRef<any>(null);
 
   useEffect(() => {
     const t = setInterval(() => setCurrentTime(new Date()), 1000);
@@ -247,18 +249,41 @@ const App: React.FC = () => {
     const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
     if (!SpeechRecognition) return;
 
-    let autoRecognition: any;
-    try {
-      autoRecognition = new SpeechRecognition();
+    const startAutoRecognition = () => {
+      if (recognitionRef.current) {
+        try { recognitionRef.current.stop(); } catch(e){}
+      }
+
+      const autoRecognition = new SpeechRecognition();
       autoRecognition.continuous = true;
       autoRecognition.interimResults = false;
       autoRecognition.lang = 'en-US';
+      recognitionRef.current = autoRecognition;
+
+      autoRecognition.onstart = () => setIsListening(true);
+      autoRecognition.onend = () => {
+        setIsListening(false);
+        // Small delay before auto-restart
+        setTimeout(() => {
+          if (isLoggedIn || showLogin) {
+            try { autoRecognition.start(); } catch (e) {}
+          }
+        }, 1000);
+      };
+
+      autoRecognition.onerror = (event: any) => {
+        console.warn('Voice listener error:', event.error);
+        setIsListening(false);
+        if (event.error === 'not-allowed' || event.error === 'service-not-allowed') {
+          console.error("Mic access denied. Mobile/Tablet requires manual tap.");
+        }
+      };
 
       autoRecognition.onresult = (event: any) => {
         const current = event.resultIndex;
         const autoTranscript = event.results[current][0].transcript.toLowerCase();
 
-        // Universal "Hello Nova" greeting — works for ALL users
+        // Universal "Hello Nova" greeting
         if (autoTranscript.includes('hello nova') || autoTranscript.includes('hey nova') || autoTranscript.includes('hi nova')) {
           const now = new Date();
           const hour = now.getHours();
@@ -284,20 +309,15 @@ const App: React.FC = () => {
           }
           return;
         }
-        
+
         if (isLoggedIn) {
           if (autoTranscript.includes('close nova') || autoTranscript.includes('nova close') || autoTranscript.includes('lock terminal')) {
-             console.log("Logout Wake Word Detected!");
              playWelcomeVoice("Nova signing off. Goodbye.");
              setCurrentUser(null);
-             localStorage.removeItem('rising_tech_user');
-             localStorage.removeItem('rising_tech_windows');
-             localStorage.removeItem('rising_tech_focused_window');
              setOpenWindows([]);
              return;
           }
 
-          // Desktop App Voice Navigation Core
           const triggerApp = (type: string, msg: string) => {
              if (msg) playWelcomeVoice(msg);
              const id = `${type}-${Date.now()}`;
@@ -328,159 +348,95 @@ const App: React.FC = () => {
              });
           };
 
-          if (autoTranscript.includes('close user management') || autoTranscript.includes('close admin')) { closeAppVoice('users', 'Closing User Management.'); return; }
-          if (autoTranscript.includes('close kanban') || autoTranscript.includes('close project manager')) { closeAppVoice('kanban', 'Closing Kanban.'); return; }
-          if (autoTranscript.includes('close dashboard')) { closeAppVoice('dashboard', 'Closing dashboard.'); return; }
-          if (autoTranscript.includes('close email') || autoTranscript.includes('close sender')) { closeAppVoice('sender', 'Closing email process.'); return; }
-          if (autoTranscript.includes('close report')) { closeAppVoice('reports', 'Closing active reports.'); return; }
-          if (autoTranscript.includes('close setting')) { closeAppVoice('settings', 'Settings closed.'); return; }
+          if (autoTranscript.includes('close user management')) { closeAppVoice('users', 'Closing User Management.'); return; }
+          if (autoTranscript.includes('close kanban')) { closeAppVoice('kanban', 'Closing Kanban.'); return; }
           if (autoTranscript.includes('close meeting')) { closeAppVoice('meetings', 'Leaving meeting space.'); return; }
-          if (autoTranscript.includes('close all tools') || autoTranscript.includes('close all windows') || autoTranscript.includes('clear screen')) {
-             playWelcomeVoice("Purging workspace. All windows closed.");
-             setOpenWindows([]);
-             return;
-          }
+          if (autoTranscript.includes('clear screen')) { setOpenWindows([]); return; }
           
-          if (autoTranscript.includes('reboot nova') || autoTranscript.includes('nova reboot')) {
+          if (autoTranscript.includes('reboot nova')) {
             if (isAdmin) {
-              playWelcomeVoice("Initiating system purge. Wiping database. Only administrators will survive.");
-              // Delete all non-admin accounts
+              playWelcomeVoice("Initiating system purge.");
               supabase.from('app_users').delete().neq('role', 'admin').then(() => {
-                 setTimeout(() => {
-                   playWelcomeVoice("Reboot complete. System restored to baseline.");
-                 }, 4000);
+                  setTimeout(() => playWelcomeVoice("Reboot complete."), 4000);
               });
             } else {
-              playWelcomeVoice("Access Denied. Administrative clearance required to purge system.");
+              playWelcomeVoice("Access Denied.");
             }
             return;
           }
-
           return;
         }
 
         if (awaitingCodeRef.current) {
-          if (autoTranscript.includes('omega 7') || autoTranscript.includes('omega seven') || autoTranscript.includes('omega-7')) {
-            playWelcomeVoice("Code verified. Welcome, Master.");
+          if (autoTranscript.includes('omega 7') || autoTranscript.includes('omega-7')) {
+            playWelcomeVoice("Welcome, Master.");
             setShowLogin(true);
             setIsVoiceActive(true);
-            setVoiceTranscript('Code verified. Accessing administration...');
+            setVoiceTranscript('Code verified...');
             setLoginForm({ username: 'risingtech', password: 'rising@tech@innovations' });
-            localStorage.setItem('rt_auto_open', 'users');
             setTimeout(() => {
               document.getElementById('login-btn')?.click();
               setIsVoiceActive(false);
-              setVoiceTranscript('');
               awaitingCodeRef.current = false;
             }, 1000);
           } else {
-            playWelcomeVoice("Access Denied. Incorrect authorization code.");
-            setVoiceTranscript('Access Denied. Incorrect code.');
-            setIsVoiceActive(true);
-            setTimeout(() => {
-               setIsVoiceActive(false);
-               setShowLogin(false);
-               awaitingCodeRef.current = false;
-            }, 2000);
+            playWelcomeVoice("Access Denied.");
+            awaitingCodeRef.current = false;
           }
           return;
         }
         
-        if (autoTranscript.includes('open nova') || autoTranscript.includes('nova open')) {
-          console.log("Global Wake Word Detected!");
-          
+        if (autoTranscript.includes('open nova')) {
           playWelcomeVoice("Recognized. Awaiting authorization code.");
           awaitingCodeRef.current = true;
-
-          // Visual activation without needing to click
           setShowLogin(true);
           setIsVoiceActive(true);
-          setVoiceTranscript('Nova active. Awaiting authorization code...');
-        } else if (autoTranscript.includes('login nova') || autoTranscript.includes('nova login')) {
-          console.log("Login Modal Wake Word Detected!");
+          setVoiceTranscript('Nova active. Awaiting code...');
+        } else if (autoTranscript.includes('login nova')) {
           playWelcomeVoice("Authentication portal opened.");
           setShowLogin(true);
-          setIsVoiceActive(false);
         } else if (autoTranscript.includes('nova')) {
-          // Interactive Nova Q&A — catch-all for any question directed at Nova
-          const question = event.results[current][0].transcript;
-          console.log("Nova Q&A:", question);
-          
+          // Gemini Q&A
+          const question = autoTranscript;
           const apiKey = import.meta.env.VITE_GEMINI_API_KEY;
-          if (!apiKey || apiKey === 'YOUR_GEMINI_API_KEY_HERE') {
-            playWelcomeVoice("I'm sorry, my intelligence module is offline. API key not configured.");
+          if (!apiKey) {
+            playWelcomeVoice("Intelligence module offline.");
             return;
           }
-
-          playWelcomeVoice("Let me think about that.");
-
+          playWelcomeVoice("Thinking...");
           (async () => {
             try {
-              const prompt = `You are Nova, an AI voice assistant for Rising Tech IT Solutions. You are helpful, concise, and speak in a professional yet warm manner. Keep your answers brief — ideally 1 to 3 sentences — since they will be read aloud. The user said: "${question}". Respond naturally.`;
-              
+              const prompt = `You are Nova. User asked: "${question}". Keep it to 2 sentences.`;
               const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                  contents: [{ role: 'user', parts: [{ text: prompt }] }],
-                  generationConfig: { temperature: 0.7, maxOutputTokens: 150 }
-                })
+                body: JSON.stringify({ contents: [{ role: 'user', parts: [{ text: prompt }] }] })
               });
-
               const data = await res.json();
               const answer = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
-              
-              if (answer) {
-                playWelcomeVoice(answer);
-              } else {
-                playWelcomeVoice("I didn't catch a response from my servers. Please try again.");
-              }
-            } catch (err) {
-              console.error("Nova Q&A Error:", err);
-              playWelcomeVoice("I encountered an error processing your request.");
-            }
+              if (answer) playWelcomeVoice(answer);
+            } catch (err) {}
           })();
         }
       };
 
-      // Auto-restart listening — ALWAYS keep Nova alive
-      autoRecognition.onend = () => {
-        setTimeout(() => {
-          try { autoRecognition.start(); } catch (e) {}
-        }, 300);
-      };
+      try {
+        autoRecognition.start();
+      } catch (e) {
+        console.log('Auto-start blocked (gesture needed)');
+      }
+    };
 
-      autoRecognition.onerror = (event: any) => {
-        console.warn('Voice listener error:', event.error);
-        
-        // Handle specific critical errors
-        if (event.error === 'network') {
-          // If network fails, don't just loop error. Wait and notify if repeated.
-          console.error("Critical Network Error in Web Speech API. Ensure stable internet.");
-        }
+    // Store globally for manual activation
+    (window as any).startNovaVoice = startAutoRecognition;
 
-        // Auto-recover from any recoverable error
-        if (event.error !== 'not-allowed' && event.error !== 'service-not-allowed') {
-          setTimeout(() => {
-            try { 
-               if (autoRecognition.readyState !== 'listening') {
-                 autoRecognition.start(); 
-               }
-            } catch (e) {}
-          }, 2000); // Back off slightly on error
-        }
-      };
-
-      autoRecognition.start();
-    } catch (e) {
-      console.log('Background voice detection queued (requires user gesture/mic permission).');
-    }
+    // Try auto-start (usually only works on Desktop)
+    startAutoRecognition();
 
     return () => {
-      if (autoRecognition) {
-        autoRecognition.onend = null;
-        autoRecognition.onerror = null;
-        try { autoRecognition.stop(); } catch (e) {}
+      if (recognitionRef.current) {
+        recognitionRef.current.onend = null;
+        try { recognitionRef.current.stop(); } catch (e) {}
       }
     };
   }, [isLoggedIn, isAdmin, currentUser, kanbanTasks]);
@@ -2163,9 +2119,10 @@ If they do not provide the keyword, return ONLY: { "action": "reject", "message"
               <span>OR</span>
               <div style={{ flex: 1, height: '1px', background: 'var(--glass-border)' }} />
             </div>
-            <button onClick={handleVoiceLogin} type="button" className="btn-primary" style={{ width: '100%', justifyContent: 'center', background: 'rgba(139,92,246,0.1)', color: '#a78bfa', boxShadow: 'none', border: '1px solid rgba(139,92,246,0.3)' }}>
-              <Bot size={16} /> AI Voice Verify
+            <button onClick={() => { handleVoiceLogin(); (window as any).startNovaVoice?.(); }} type="button" className="btn-primary" style={{ width: '100%', justifyContent: 'center', background: 'rgba(139,92,246,0.1)', color: '#a78bfa', boxShadow: 'none', border: '1px solid rgba(139,92,246,0.3)' }}>
+              <Bot size={16} /> {isListening ? 'AI Voice Verify' : 'Activate AI Voice'}
             </button>
+            {!isListening && <p style={{ fontSize: '0.65rem', color: 'var(--text-muted)', marginTop: '8px' }}>Mobile/Tablet: Tap to enable mic permissions</p>}
           </div>
         )}
 
@@ -2194,6 +2151,21 @@ If they do not provide the keyword, return ONLY: { "action": "reject", "message"
         <div className="menubar-left">
           <span className="apple-logo">🍎</span>
           <span>Rising Tech</span>
+          <div 
+            onClick={() => (window as any).startNovaVoice?.()} 
+            style={{ 
+              marginLeft: '20px', 
+              display: 'flex', 
+              alignItems: 'center', 
+              gap: '6px', 
+              cursor: 'pointer',
+              color: isListening ? '#3b82f6' : 'var(--text-muted)',
+              transition: 'all 0.3s'
+            }}
+          >
+            <Mic size={14} style={{ animation: isListening ? 'pulse 1.5s infinite' : 'none' }} />
+            <span style={{ fontSize: '0.75rem', fontWeight: 600 }}>{isListening ? 'Nova: Active' : 'Nova: Disabled'}</span>
+          </div>
         </div>
         <div className="menubar-right">
           <span>{dateStr}</span>
