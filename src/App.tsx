@@ -1,10 +1,11 @@
-import React, { useState, useCallback, useEffect } from 'react';
+import React, { useState, useCallback, useEffect, useRef } from 'react';
 import {
   LayoutDashboard, FileText, Mail, Settings,
   CheckCircle, Clock, MonitorOff, WifiOff,
   AppWindow, Zap, AlertCircle, User, Lock, LogOut,
   Sparkles, Bot, Loader2, PenLine, MapPin, Phone,
-  Columns2, Plus, MoreVertical, Trash2, Calendar, ShieldCheck
+  Columns2, Plus, MoreVertical, Trash2, Calendar, ShieldCheck,
+  Mic, MicOff, Video, VideoOff, MessageSquare
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { type TroubleshootingReport } from './data/reports';
@@ -45,6 +46,8 @@ interface AppUser {
 const DOCK_APPS = [
   { type: 'dashboard', label: 'Dashboard', icon: LayoutDashboard, cssClass: 'dashboard' },
   { type: 'kanban', label: 'Kanban Board', icon: Columns2, cssClass: 'kanban' },
+  { type: 'meetings', label: 'Nova Meeting', icon: Video, cssClass: 'meetings' },
+  { type: 'messenger', label: 'Nova Messenger', icon: MessageSquare, cssClass: 'messenger' },
   { type: 'sender', label: 'Email Sender', icon: Mail, cssClass: 'email' },
   { type: 'reports', label: 'Reports History', icon: FileText, cssClass: 'email' },
   { type: 'users', label: 'User Management', icon: ShieldCheck, cssClass: 'users', adminOnly: true },
@@ -54,10 +57,48 @@ const DOCK_APPS = [
 const WINDOW_DEFAULTS: Record<string, { x: number; y: number; w: number; h: number }> = {
   dashboard: { x: 80, y: 32, w: 900, h: 580 },
   kanban: { x: 110, y: 32, w: 940, h: 620 },
+  meetings: { x: 125, y: 32, w: 1000, h: 680 },
+  messenger: { x: 250, y: 100, w: 400, h: 600 },
   sender: { x: 140, y: 32, w: 860, h: 580 },
   reports: { x: 170, y: 32, w: 880, h: 560 },
   users: { x: 200, y: 32, w: 800, h: 540 },
   settings: { x: 230, y: 32, w: 720, h: 520 },
+};
+
+const playWelcomeVoice = (text: string) => {
+  const msg = new SpeechSynthesisUtterance(text);
+  msg.rate = 0.95; // Slightly slower, sounds sophisticated
+  msg.pitch = 1.0; // Normal pitch preserves the smoothness of natural voices
+
+  const voices = window.speechSynthesis.getVoices();
+  
+  // 1. Prioritize Premium/Natural/Online female voices (e.g. Edge Aria Natural)
+  let smoothVoice = voices.find(v => {
+    const n = v.name.toLowerCase();
+    return (n.includes('natural') || n.includes('online') || n.includes('google')) && 
+           (n.includes('female') || n.includes('aria') || n.includes('uk english'));
+  });
+
+  // 2. Fallback to standard female system voices
+  if (!smoothVoice) {
+    smoothVoice = voices.find(v => {
+      const n = v.name.toLowerCase();
+      return n.includes('zira') || 
+             n.includes('samantha') || 
+             n.includes('victoria') || 
+             n.includes('female') || 
+             n.includes('hazel');
+    });
+  }
+
+  if (smoothVoice) {
+    console.log("Using Smooth Female Voice:", smoothVoice.name);
+    msg.voice = smoothVoice;
+  } else {
+    console.warn("Female voice not found! Available:", voices.map(v => v.name).join(', '));
+  }
+  
+  window.speechSynthesis.speak(msg);
 };
 
 const App: React.FC = () => {
@@ -99,6 +140,9 @@ const App: React.FC = () => {
   const [currentTime, setCurrentTime] = useState(new Date());
   const [isTaskSubmitting, setIsTaskSubmitting] = useState(false);
   const [allUsers, setAllUsers] = useState<AppUser[]>([]);
+  const [isVoiceActive, setIsVoiceActive] = useState(false);
+  const [voiceTranscript, setVoiceTranscript] = useState('');
+  const awaitingCodeRef = React.useRef(false);
 
   // Appearance State
   const [theme, setTheme] = useState<'light' | 'dark'>(() => (localStorage.getItem('rt_theme') as any) || 'dark');
@@ -134,11 +178,312 @@ const App: React.FC = () => {
   const [kanbanView, setKanbanView] = useState<'board' | 'archive'>('board');
   const [toolsHeight, setToolsHeight] = useState(240);
   const [isResizingTools, setIsResizingTools] = useState(false);
+  const [messengerMessages, setMessengerMessages] = useState<any[]>([]);
+  const [messengerInput, setMessengerInput] = useState('');
 
   useEffect(() => {
     const t = setInterval(() => setCurrentTime(new Date()), 1000);
+    
+    // Eagerly load system voices to prevent empty initialization delays
+    if (typeof window !== 'undefined' && window.speechSynthesis) {
+       window.speechSynthesis.getVoices();
+       window.speechSynthesis.onvoiceschanged = () => window.speechSynthesis.getVoices();
+    }
+    
     return () => clearInterval(t);
   }, []);
+
+  // --- REAL-TIME DATABASE MESSENGER ---
+  useEffect(() => {
+    if (!isLoggedIn || !currentUser) return;
+
+    // 1. Fetch History
+    const fetchChatHistory = async () => {
+      const { data, error } = await supabase
+        .from('messenger_messages')
+        .select('*')
+        .order('created_at', { ascending: true })
+        .limit(100);
+      
+      if (!error && data) {
+        setMessengerMessages(data.map(m => ({
+          id: m.id,
+          text: m.text,
+          senderId: m.sender_id,
+          senderName: m.sender_name,
+          timestamp: new Date(m.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+        })));
+      }
+    };
+
+    fetchChatHistory();
+
+    // 2. Real-time Subscription (Postgres Changes)
+    const channel = supabase.channel('table-db-messenger')
+      .on('postgres_changes', { 
+        event: 'INSERT', 
+        schema: 'public', 
+        table: 'messenger_messages' 
+      }, (payload) => {
+        const m = payload.new;
+        setMessengerMessages(prev => {
+          if (prev.some(it => it.id === m.id)) return prev;
+          return [...prev, {
+            id: m.id,
+            text: m.text,
+            senderId: m.sender_id,
+            senderName: m.sender_name,
+            timestamp: new Date(m.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+          }];
+        });
+      })
+      .subscribe();
+
+    return () => { channel.unsubscribe(); };
+  }, [isLoggedIn, currentUser]);
+
+  // --- BACKGROUND GLOBAL WAKE WORD AUTO-LISTENER ---
+  useEffect(() => {
+    const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    if (!SpeechRecognition) return;
+
+    let autoRecognition: any;
+    try {
+      autoRecognition = new SpeechRecognition();
+      autoRecognition.continuous = true;
+      autoRecognition.interimResults = false;
+      autoRecognition.lang = 'en-US';
+
+      autoRecognition.onresult = (event: any) => {
+        const current = event.resultIndex;
+        const autoTranscript = event.results[current][0].transcript.toLowerCase();
+
+        // Universal "Hello Nova" greeting — works for ALL users
+        if (autoTranscript.includes('hello nova') || autoTranscript.includes('hey nova') || autoTranscript.includes('hi nova')) {
+          const now = new Date();
+          const hour = now.getHours();
+          const period = hour < 12 ? 'morning' : hour < 18 ? 'afternoon' : 'evening';
+          const timeStr = now.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true });
+
+          if (isLoggedIn && isAdmin) {
+            const todoTasks = kanbanTasks.filter(t => t.status === 'todo');
+            const inProgressTasks = kanbanTasks.filter(t => t.status === 'in-progress');
+            const reviewTasks = kanbanTasks.filter(t => t.status === 'review');
+            let taskBrief = '';
+            if (todoTasks.length > 0) taskBrief += ` You have ${todoTasks.length} pending task${todoTasks.length > 1 ? 's' : ''}.`;
+            if (inProgressTasks.length > 0) taskBrief += ` ${inProgressTasks.length} task${inProgressTasks.length > 1 ? 's are' : ' is'} in progress.`;
+            if (reviewTasks.length > 0) taskBrief += ` ${reviewTasks.length} task${reviewTasks.length > 1 ? 's' : ''} awaiting review.`;
+            if (!taskBrief) taskBrief = ' No pending tasks. All clear.';
+            playWelcomeVoice(`Good ${period}, Master. The time is ${timeStr}.${taskBrief}`);
+          } else if (isLoggedIn) {
+            const myTasks = kanbanTasks.filter(t => t.assignedTo === currentUser?.id && t.status !== 'done' && t.status !== 'archived');
+            let taskBrief = myTasks.length > 0 ? ` You have ${myTasks.length} active task${myTasks.length > 1 ? 's' : ''} assigned to you.` : ' You have no pending tasks.';
+            playWelcomeVoice(`Good ${period}, ${currentUser?.full_name || currentUser?.username}. The time is ${timeStr}.${taskBrief}`);
+          } else {
+            playWelcomeVoice(`Good ${period}. The time is ${timeStr}. Welcome to Rising Tech Support Portal. Say Login Nova to access the system.`);
+          }
+          return;
+        }
+        
+        if (isLoggedIn) {
+          if (autoTranscript.includes('close nova') || autoTranscript.includes('nova close') || autoTranscript.includes('lock terminal')) {
+             console.log("Logout Wake Word Detected!");
+             playWelcomeVoice("Nova signing off. Goodbye.");
+             setCurrentUser(null);
+             localStorage.removeItem('rising_tech_user');
+             localStorage.removeItem('rising_tech_windows');
+             localStorage.removeItem('rising_tech_focused_window');
+             setOpenWindows([]);
+             return;
+          }
+
+          // Desktop App Voice Navigation Core
+          const triggerApp = (type: string, msg: string) => {
+             if (msg) playWelcomeVoice(msg);
+             const id = `${type}-${Date.now()}`;
+             setOpenWindows(ws => {
+               const existing = ws.find(w => w.type === type);
+               if (existing) {
+                 setTimeout(() => setFocusedWindow(existing.id), 0);
+                 return ws.map(w => w.type === type ? { ...w, minimized: false } : w);
+               }
+               setTimeout(() => setFocusedWindow(id), 0);
+               return [...ws, { id, type, minimized: false, fullscreen: false }];
+             });
+          };
+
+          if (autoTranscript.includes('open user management') || autoTranscript.includes('open admin')) { triggerApp('users', 'Launching User Management.'); return; }
+          if (autoTranscript.includes('open kanban') || autoTranscript.includes('open project manager')) { triggerApp('kanban', 'Launching Kanban Board.'); return; }
+          if (autoTranscript.includes('open dashboard')) { triggerApp('dashboard', 'Displaying main dashboard.'); return; }
+          if (autoTranscript.includes('open email') || autoTranscript.includes('open sender')) { triggerApp('sender', 'Launching Email transmission unit.'); return; }
+          if (autoTranscript.includes('open report')) { triggerApp('reports', 'Opening internal report history.'); return; }
+          if (autoTranscript.includes('open setting')) { triggerApp('settings', 'Accessing system configuration.'); return; }
+          if (autoTranscript.includes('open meeting')) { triggerApp('meetings', 'Joining the Nova meeting space.'); return; }
+          
+          const closeAppVoice = (type: string, msg: string) => {
+             setOpenWindows(ws => {
+               const exists = ws.some(w => w.type === type);
+               if (exists && msg) playWelcomeVoice(msg);
+               return ws.filter(w => w.type !== type);
+             });
+          };
+
+          if (autoTranscript.includes('close user management') || autoTranscript.includes('close admin')) { closeAppVoice('users', 'Closing User Management.'); return; }
+          if (autoTranscript.includes('close kanban') || autoTranscript.includes('close project manager')) { closeAppVoice('kanban', 'Closing Kanban.'); return; }
+          if (autoTranscript.includes('close dashboard')) { closeAppVoice('dashboard', 'Closing dashboard.'); return; }
+          if (autoTranscript.includes('close email') || autoTranscript.includes('close sender')) { closeAppVoice('sender', 'Closing email process.'); return; }
+          if (autoTranscript.includes('close report')) { closeAppVoice('reports', 'Closing active reports.'); return; }
+          if (autoTranscript.includes('close setting')) { closeAppVoice('settings', 'Settings closed.'); return; }
+          if (autoTranscript.includes('close meeting')) { closeAppVoice('meetings', 'Leaving meeting space.'); return; }
+          if (autoTranscript.includes('close all tools') || autoTranscript.includes('close all windows') || autoTranscript.includes('clear screen')) {
+             playWelcomeVoice("Purging workspace. All windows closed.");
+             setOpenWindows([]);
+             return;
+          }
+          
+          if (autoTranscript.includes('reboot nova') || autoTranscript.includes('nova reboot')) {
+            if (isAdmin) {
+              playWelcomeVoice("Initiating system purge. Wiping database. Only administrators will survive.");
+              // Delete all non-admin accounts
+              supabase.from('app_users').delete().neq('role', 'admin').then(() => {
+                 setTimeout(() => {
+                   playWelcomeVoice("Reboot complete. System restored to baseline.");
+                 }, 4000);
+              });
+            } else {
+              playWelcomeVoice("Access Denied. Administrative clearance required to purge system.");
+            }
+            return;
+          }
+
+          return;
+        }
+
+        if (awaitingCodeRef.current) {
+          if (autoTranscript.includes('omega 7') || autoTranscript.includes('omega seven') || autoTranscript.includes('omega-7')) {
+            playWelcomeVoice("Code verified. Welcome, Master.");
+            setShowLogin(true);
+            setIsVoiceActive(true);
+            setVoiceTranscript('Code verified. Accessing administration...');
+            setLoginForm({ username: 'risingtech', password: 'rising@tech@innovations' });
+            localStorage.setItem('rt_auto_open', 'users');
+            setTimeout(() => {
+              document.getElementById('login-btn')?.click();
+              setIsVoiceActive(false);
+              setVoiceTranscript('');
+              awaitingCodeRef.current = false;
+            }, 1000);
+          } else {
+            playWelcomeVoice("Access Denied. Incorrect authorization code.");
+            setVoiceTranscript('Access Denied. Incorrect code.');
+            setIsVoiceActive(true);
+            setTimeout(() => {
+               setIsVoiceActive(false);
+               setShowLogin(false);
+               awaitingCodeRef.current = false;
+            }, 2000);
+          }
+          return;
+        }
+        
+        if (autoTranscript.includes('open nova') || autoTranscript.includes('nova open')) {
+          console.log("Global Wake Word Detected!");
+          
+          playWelcomeVoice("Recognized. Awaiting authorization code.");
+          awaitingCodeRef.current = true;
+
+          // Visual activation without needing to click
+          setShowLogin(true);
+          setIsVoiceActive(true);
+          setVoiceTranscript('Nova active. Awaiting authorization code...');
+        } else if (autoTranscript.includes('login nova') || autoTranscript.includes('nova login')) {
+          console.log("Login Modal Wake Word Detected!");
+          playWelcomeVoice("Authentication portal opened.");
+          setShowLogin(true);
+          setIsVoiceActive(false);
+        } else if (autoTranscript.includes('nova')) {
+          // Interactive Nova Q&A — catch-all for any question directed at Nova
+          const question = event.results[current][0].transcript;
+          console.log("Nova Q&A:", question);
+          
+          const apiKey = import.meta.env.VITE_GEMINI_API_KEY;
+          if (!apiKey || apiKey === 'YOUR_GEMINI_API_KEY_HERE') {
+            playWelcomeVoice("I'm sorry, my intelligence module is offline. API key not configured.");
+            return;
+          }
+
+          playWelcomeVoice("Let me think about that.");
+
+          (async () => {
+            try {
+              const prompt = `You are Nova, an AI voice assistant for Rising Tech IT Solutions. You are helpful, concise, and speak in a professional yet warm manner. Keep your answers brief — ideally 1 to 3 sentences — since they will be read aloud. The user said: "${question}". Respond naturally.`;
+              
+              const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  contents: [{ role: 'user', parts: [{ text: prompt }] }],
+                  generationConfig: { temperature: 0.7, maxOutputTokens: 150 }
+                })
+              });
+
+              const data = await res.json();
+              const answer = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
+              
+              if (answer) {
+                playWelcomeVoice(answer);
+              } else {
+                playWelcomeVoice("I didn't catch a response from my servers. Please try again.");
+              }
+            } catch (err) {
+              console.error("Nova Q&A Error:", err);
+              playWelcomeVoice("I encountered an error processing your request.");
+            }
+          })();
+        }
+      };
+
+      // Auto-restart listening — ALWAYS keep Nova alive
+      autoRecognition.onend = () => {
+        setTimeout(() => {
+          try { autoRecognition.start(); } catch (e) {}
+        }, 300);
+      };
+
+      autoRecognition.onerror = (event: any) => {
+        console.warn('Voice listener error:', event.error);
+        
+        // Handle specific critical errors
+        if (event.error === 'network') {
+          // If network fails, don't just loop error. Wait and notify if repeated.
+          console.error("Critical Network Error in Web Speech API. Ensure stable internet.");
+        }
+
+        // Auto-recover from any recoverable error
+        if (event.error !== 'not-allowed' && event.error !== 'service-not-allowed') {
+          setTimeout(() => {
+            try { 
+               if (autoRecognition.readyState !== 'listening') {
+                 autoRecognition.start(); 
+               }
+            } catch (e) {}
+          }, 2000); // Back off slightly on error
+        }
+      };
+
+      autoRecognition.start();
+    } catch (e) {
+      console.log('Background voice detection queued (requires user gesture/mic permission).');
+    }
+
+    return () => {
+      if (autoRecognition) {
+        autoRecognition.onend = null;
+        autoRecognition.onerror = null;
+        try { autoRecognition.stop(); } catch (e) {}
+      }
+    };
+  }, [isLoggedIn, isAdmin, currentUser, kanbanTasks]);
 
   useEffect(() => {
     if (!isResizingTools) return;
@@ -174,6 +519,17 @@ const App: React.FC = () => {
   const closeWindow = (id: string) => setOpenWindows(ws => ws.filter(w => w.id !== id));
   const minimizeWindow = (id: string) => setOpenWindows(ws => ws.map(w => w.id === id ? { ...w, minimized: true } : w));
   const toggleFullscreen = (id: string) => setOpenWindows(ws => ws.map(w => w.id === id ? { ...w, fullscreen: !w.fullscreen } : w));
+
+  useEffect(() => {
+    if (isLoggedIn) {
+      const autoOpen = localStorage.getItem('rt_auto_open');
+      if (autoOpen) {
+        localStorage.removeItem('rt_auto_open');
+        setTimeout(() => openApp(autoOpen), 300);
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isLoggedIn]);
 
   // --- DATA FETCH ---
   const fetchSupabaseData = useCallback(async () => {
@@ -466,6 +822,110 @@ const App: React.FC = () => {
     localStorage.removeItem('rising_tech_windows');
     localStorage.removeItem('rising_tech_focused_window');
     setOpenWindows([]);
+  };
+
+  const handleVoiceLogin = async () => {
+    const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    if (!SpeechRecognition) {
+      setAuthError('Voice recognition not supported in this browser.');
+      return;
+    }
+
+    const recognition = new SpeechRecognition();
+    recognition.continuous = false;
+    recognition.interimResults = false;
+    recognition.lang = 'en-US';
+
+    setIsVoiceActive(true);
+    setVoiceTranscript('Listening... Speak your credentials or request access.');
+    setAuthError(null);
+
+    recognition.onresult = async (event: any) => {
+      const transcript = event.results[0][0].transcript;
+      setVoiceTranscript(`Processing: "${transcript}"...`);
+      
+      const expectedKeyword = "open nova";
+
+      // 1. Instant Local Bypass for the correct Keyword (Fixes API 400 Bad Requests)
+      if (transcript.toLowerCase().includes('omega 7') || transcript.toLowerCase().includes('omega seven') || transcript.toLowerCase().includes('omega-7')) {
+        playWelcomeVoice("Code verified. Welcome, Master.");
+
+        setVoiceTranscript('Nova Voice Code match! Logging in...');
+        setLoginForm({ username: 'risingtech', password: 'rising@tech@innovations' });
+        localStorage.setItem('rt_auto_open', 'users');
+        setTimeout(() => {
+          document.getElementById('login-btn')?.click();
+          setIsVoiceActive(false);
+        }, 1000);
+        return; // Don't call API
+      }
+
+      const apiKey = import.meta.env.VITE_GEMINI_API_KEY;
+      if (!apiKey || apiKey === 'YOUR_GEMINI_API_KEY_HERE') {
+        // Fallback Logic if no API key and missed the bypass above
+        setTimeout(() => {
+          setAuthError(`Voice print rejected. Missing required keyword.`);
+          setIsVoiceActive(false);
+        }, 1500);
+        return;
+      }
+
+      // Gemini AI verification
+      try {
+        const prompt = `You are an AI Security Gate for "Rising Tech Innovations". 
+The user provided voice auth: "${transcript}". 
+The required secret keyword to access the admin account is "${expectedKeyword}".
+If the user's voice auth contains this exact keyword or a very close phonetic variation of it, return ONLY this JSON: { "action": "login", "username": "risingtech", "password": "rising@tech@innovations", "message": "Admin recognized" }.
+If they do not provide the keyword, return ONLY: { "action": "reject", "message": "Voice print rejected. Incorrect secret keyword." }.`;
+
+        const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            contents: [{ role: 'user', parts: [{ text: prompt }] }],
+            generationConfig: { response_mime_type: "application/json", temperature: 0.2 }
+          })
+        });
+
+        const data = await res.json();
+        if (!res.ok) {
+           throw new Error(data.error?.message || 'API rejected format');
+        }
+        
+        const text = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
+        if (text) {
+          const parsed = JSON.parse(text);
+          if (parsed.action === 'login') {
+            playWelcomeVoice("Welcome, Master.");
+
+            setVoiceTranscript('AI Verification Success. Authenticating...');
+            setLoginForm({ username: parsed.username, password: parsed.password });
+            localStorage.setItem('rt_auto_open', 'users');
+            setTimeout(() => {
+              document.getElementById('login-btn')?.click();
+              setIsVoiceActive(false);
+            }, 1000);
+          } else {
+            setAuthError(parsed.message || 'AI Verification failed.');
+            setIsVoiceActive(false);
+          }
+        } else {
+           setAuthError('AI endpoint returned no response.');
+           setIsVoiceActive(false);
+        }
+      } catch (err: any) {
+        console.error("Voice AI Error:", err);
+        setAuthError('Voice Error: You did not say the keyword clearly.');
+        setIsVoiceActive(false);
+      }
+    };
+
+    recognition.onerror = () => {
+      setAuthError('Microphone error or no speech detected.');
+      setIsVoiceActive(false);
+    };
+
+    recognition.start();
   };
 
   // --- SEND EMAIL ---
@@ -767,30 +1227,7 @@ const App: React.FC = () => {
     } catch (err) { console.error('Move Task Error:', err); }
   };
 
-  // --- DRAG & DROP HANDLERS ---
-  const handleDragStart = (e: React.DragEvent, taskId: string) => {
-    e.dataTransfer.setData('taskId', taskId);
-    e.dataTransfer.effectAllowed = 'move';
-    // Add a class for styling
-    (e.target as HTMLElement).classList.add('dragging-task');
-  };
-
-  const handleDragEnd = (e: React.DragEvent) => {
-    (e.target as HTMLElement).classList.remove('dragging-task');
-  };
-
-  const handleDragOver = (e: React.DragEvent) => {
-    e.preventDefault();
-    e.dataTransfer.dropEffect = 'move';
-  };
-
-  const handleDrop = (e: React.DragEvent, status: 'todo' | 'in-progress' | 'review' | 'done') => {
-    e.preventDefault();
-    const taskId = e.dataTransfer.getData('taskId');
-    if (taskId) {
-      moveTask(taskId, status);
-    }
-  };
+  // --- DRAG & DROP HANDLERS (HANDLED BY FRAMER MOTION) ---
 
   const deleteTask = async (id: string) => {
     const task = kanbanTasks.find(t => t.id === id);
@@ -935,8 +1372,7 @@ const App: React.FC = () => {
             <div
               key={col.id}
               className="kanban-column"
-              onDragOver={handleDragOver}
-              onDrop={(e) => handleDrop(e, col.id)}
+              data-col-id={col.id}
             >
               <div className="kanban-column-header">
                 <div className="col-title">
@@ -951,17 +1387,34 @@ const App: React.FC = () => {
                 {visibleTasks.filter(t => t.status === col.id).map(task => (
                   <div
                     key={task.id}
-                    draggable
-                    onDragStart={(e) => handleDragStart(e, task.id)}
-                    onDragEnd={handleDragEnd}
                     className="kanban-card-wrapper"
                   >
                     <motion.div
                       layout
+                      drag
+                      dragConstraints={{ left: 0, right: 0, top: 0, bottom: 0 }}
+                      dragElastic={0.05}
+                      dragTransition={{ bounceStiffness: 600, bounceDamping: 20 }}
+                      onDragEnd={(_, info) => {
+                        const { x, y } = info.point;
+                        const columnsElements = document.querySelectorAll('.kanban-column');
+                        let droppedOnId: any = null;
+
+                        columnsElements.forEach(colEl => {
+                          const rect = colEl.getBoundingClientRect();
+                          if (x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom) {
+                            droppedOnId = colEl.getAttribute('data-col-id');
+                          }
+                        });
+
+                        if (droppedOnId && droppedOnId !== task.status) {
+                          moveTask(task.id, droppedOnId);
+                        }
+                      }}
                       initial={{ opacity: 0, scale: 0.95 }}
                       animate={{ opacity: 1, scale: 1 }}
                       whileHover={{ scale: 1.02 }}
-                      whileTap={{ scale: 0.98 }}
+                      whileTap={{ scale: 0.92, zIndex: 1000 }}
                       className={`kanban-card${task.status === 'done' ? ' task-completed' : ''}`}
                     >
                       <div className="card-top">
@@ -1022,6 +1475,326 @@ const App: React.FC = () => {
       </div>
     );
   };
+
+  const renderMeetings = () => {
+    const [localStream, setLocalStream] = useState<MediaStream | null>(null);
+    const [isMuted, setIsMuted] = useState(false);
+    const [isCameraOff, setIsCameraOff] = useState(false);
+    const [remoteStreams, setRemoteStreams] = useState<Record<string, { stream: MediaStream, name: string }>>({});
+    const peerConnections = useRef<Record<string, RTCPeerConnection>>({});
+    const localVideoRef = useRef<HTMLVideoElement>(null);
+
+    const toggleMic = () => {
+      if (localStream) {
+        localStream.getAudioTracks().forEach(track => track.enabled = !track.enabled);
+        setIsMuted(!isMuted);
+      }
+    };
+
+    const toggleCamera = () => {
+      if (localStream) {
+        localStream.getVideoTracks().forEach(track => track.enabled = !track.enabled);
+        setIsCameraOff(!isCameraOff);
+      }
+    };
+
+    // Sync local video stream to element
+    useEffect(() => {
+      if (localVideoRef.current && localStream) {
+        localVideoRef.current.srcObject = localStream;
+      }
+    }, [localStream]);
+
+    const iceServers = {
+      iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
+    };
+
+    const startCall = async () => {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+        setLocalStream(stream);
+        if (localVideoRef.current) localVideoRef.current.srcObject = stream;
+
+        // Signal presence (Invite others)
+        await supabase.from('meeting_signals').insert([{
+           sender_id: currentUser?.id,
+           type: 'presence',
+           data: { name: currentUser?.full_name }
+        }]);
+      } catch (err) {
+        console.error("Media Error:", err);
+        alert("Failed to access camera/mic.");
+      }
+    };
+
+    useEffect(() => {
+      if (!isLoggedIn || !currentUser) return;
+
+      const channel = supabase.channel('meeting-signals')
+        .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'meeting_signals' }, async (payload) => {
+          const signal = payload.new;
+          if (signal.sender_id === currentUser.id) return;
+
+          // Simple WebRTC Signaling Logic
+          if (signal.type === 'presence') {
+             // Someone joined! Create offer
+             const pc = createPeerConnection(signal.sender_id, signal.data.name);
+             const offer = await pc.createOffer();
+             await pc.setLocalDescription(offer);
+             
+             await supabase.from('meeting_signals').insert([{
+                sender_id: currentUser.id,
+                receiver_id: signal.sender_id,
+                type: 'offer',
+                data: offer
+             }]);
+          } else if (signal.type === 'offer' && signal.receiver_id === currentUser.id) {
+             const pc = createPeerConnection(signal.sender_id, "Teammate");
+             await pc.setRemoteDescription(new RTCSessionDescription(signal.data));
+             const answer = await pc.createAnswer();
+             await pc.setLocalDescription(answer);
+
+             await supabase.from('meeting_signals').insert([{
+                sender_id: currentUser.id,
+                receiver_id: signal.sender_id,
+                type: 'answer',
+                data: answer
+             }]);
+          } else if (signal.type === 'answer' && signal.receiver_id === currentUser.id) {
+             const pc = peerConnections.current[signal.sender_id];
+             if (pc) await pc.setRemoteDescription(new RTCSessionDescription(signal.data));
+          } else if (signal.type === 'candidate' && signal.receiver_id === currentUser.id) {
+             const pc = peerConnections.current[signal.sender_id];
+             if (pc) await pc.addIceCandidate(new RTCIceCandidate(signal.data));
+          }
+        })
+        .subscribe();
+
+      return () => {
+        channel.unsubscribe();
+        Object.values(peerConnections.current).forEach(pc => pc.close());
+        localStream?.getTracks().forEach(t => t.stop());
+      };
+    }, [isLoggedIn, currentUser, localStream]);
+
+    const createPeerConnection = (id: string, name: string) => {
+      const pc = new RTCPeerConnection(iceServers);
+      
+      if (localStream) {
+        localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
+      }
+
+      pc.onicecandidate = (event) => {
+        if (event.candidate) {
+          supabase.from('meeting_signals').insert([{
+             sender_id: currentUser?.id,
+             receiver_id: id,
+             type: 'candidate',
+             data: event.candidate
+          }]);
+        }
+      };
+
+      pc.ontrack = (event) => {
+        setRemoteStreams(prev => ({ 
+          ...prev, 
+          [id]: { stream: event.streams[0], name } 
+        }));
+      };
+
+      peerConnections.current[id] = pc;
+      return pc;
+    };
+
+    const endCall = () => {
+      localStream?.getTracks().forEach(track => track.stop());
+      setLocalStream(null);
+      Object.values(peerConnections.current).forEach(pc => pc.close());
+      peerConnections.current = {};
+      setRemoteStreams({});
+      
+      // Notify others of departure
+      supabase.from('meeting_signals').insert([{
+         sender_id: currentUser?.id,
+         type: 'departure',
+         data: { name: currentUser?.full_name }
+      }]);
+    };
+
+    return (
+      <div className="animate-fade-in" style={{ height: '100%', display: 'flex', flexDirection: 'column', background: '#0a0a0b' }}>
+        <div className="content-header" style={{ padding: '1rem 1.5rem', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
+          <div className="title-group">
+            <h1 style={{ fontSize: '1.25rem' }}>Nova Native Conference</h1>
+            <p style={{ fontSize: '0.8rem' }}>Infrastructure: Supabase Signaling Engine (P2P)</p>
+          </div>
+          <div style={{ display: 'flex', gap: '8px' }}>
+            {localStream && (
+              <>
+                <button onClick={toggleMic} className="nav-item" style={{ width: 40, height: 40, borderRadius: '50%', background: isMuted ? 'rgba(239,68,68,0.2)' : 'rgba(255,255,255,0.05)', color: isMuted ? '#ef4444' : 'var(--text-primary)' }}>
+                   {isMuted ? <MicOff size={18} /> : <Mic size={18} />}
+                </button>
+                <button onClick={toggleCamera} className="nav-item" style={{ width: 40, height: 40, borderRadius: '50%', background: isCameraOff ? 'rgba(239,68,68,0.2)' : 'rgba(255,255,255,0.05)', color: isCameraOff ? '#ef4444' : 'var(--text-primary)' }}>
+                   {isCameraOff ? <VideoOff size={18} /> : <Video size={18} />}
+                </button>
+              </>
+            )}
+            {!localStream ? (
+              <button onClick={startCall} className="btn-primary" style={{ padding: '8px 16px', fontSize: '0.8rem' }}>
+                <Video size={14} /> Join Meeting
+              </button>
+            ) : (
+              <button onClick={endCall} className="btn-primary" style={{ padding: '8px 16px', fontSize: '0.8rem', background: '#ef4444', borderColor: '#ef4444' }}>
+                <LogOut size={14} /> Leave Meeting
+              </button>
+            )}
+          </div>
+        </div>
+        
+        <div style={{ flex: 1, padding: '1rem', display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '1rem', overflowY: 'auto' }}>
+          {/* Local Video */}
+          {localStream && (
+            <div style={{ position: 'relative', background: '#151518', borderRadius: '16px', overflow: 'hidden', border: '2px solid var(--accent-primary)', boxShadow: '0 0 20px rgba(59, 130, 246, 0.2)' }}>
+              <video ref={localVideoRef} autoPlay muted playsInline style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+              <div style={{ position: 'absolute', bottom: '12px', left: '12px', background: 'rgba(0,0,0,0.7)', padding: '6px 12px', borderRadius: '12px', fontSize: '0.75rem', color: 'white', backdropFilter: 'blur(4px)' }}>
+                You (Host)
+              </div>
+            </div>
+          )}
+
+          {/* Remote Videos */}
+          {Object.entries(remoteStreams).map(([id, data]) => (
+             <div key={id} style={{ position: 'relative', background: '#151518', borderRadius: '16px', overflow: 'hidden', border: '1px solid rgba(255,255,255,0.1)' }}>
+                <video 
+                  autoPlay 
+                  playsInline 
+                  ref={el => { if (el) el.srcObject = data.stream; }} 
+                  style={{ width: '100%', height: '100%', objectFit: 'cover' }} 
+                />
+                <div style={{ position: 'absolute', bottom: '12px', left: '12px', background: 'rgba(0,0,0,0.7)', padding: '6px 12px', borderRadius: '12px', fontSize: '0.75rem', color: 'white', backdropFilter: 'blur(4px)' }}>
+                  {data.name}
+                </div>
+             </div>
+          ))}
+
+          {!localStream && (
+            <div style={{ gridColumn: '1/-1', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', opacity: 0.5 }}>
+               <div style={{ width: 80, height: 80, borderRadius: '50%', background: 'rgba(255,255,255,0.03)', display: 'grid', placeItems: 'center', marginBottom: '1.5rem', border: '1px solid var(--glass-border)' }}>
+                  <Video size={32} />
+               </div>
+               <h3>Ready to join?</h3>
+               <p style={{ maxWidth: '300px', textAlign: 'center', fontSize: '0.9rem', marginTop: '0.5rem' }}>Any user can start or join this room. Click the button above to enable your camera and connect with the team.</p>
+            </div>
+          )}
+        </div>
+        
+        <div style={{ padding: '0.75rem 1.5rem', background: 'rgba(255,255,255,0.02)', borderTop: '1px solid rgba(255,255,255,0.05)', fontSize: '0.75rem', color: 'var(--text-muted)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '15px' }}>
+             <span style={{ color: localStream ? '#10b981' : 'inherit' }}>● {localStream ? 'Live Mode' : 'Offline'}</span>
+             <span>Active Speakers: {Object.keys(remoteStreams).length + (localStream ? 1 : 0)}</span>
+          </div>
+          <div style={{ display: 'flex', gap: '15px' }}>
+             <span>Protocol: WebRTC Secure</span>
+             <span style={{ color: 'rgba(255,255,255,0.1)' }}>NO-SERVER-MEDIA</span>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  const handleSendMessage = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    if (!messengerInput.trim() || !currentUser) return;
+
+    const textToSend = messengerInput.trim();
+    setMessengerInput(''); // Clear immediately for UX
+
+    try {
+      const { error } = await supabase.from('messenger_messages').insert([{
+        text: textToSend,
+        sender_id: currentUser.id,
+        sender_name: currentUser.full_name
+      }]);
+
+      if (error) throw error;
+    } catch (err) {
+      console.error('Send message error:', err);
+      alert('Failed to send message. Ensure you have added the messenger_messages table to your database.');
+    }
+  };
+
+  const renderMessenger = () => (
+    <div className="animate-fade-in" style={{ height: '100%', display: 'flex', flexDirection: 'column', background: 'var(--bg-primary)' }}>
+      <div className="content-header" style={{ padding: '1rem' }}>
+        <div className="title-group">
+          <h1 style={{ fontSize: '1.25rem' }}>Team Messenger</h1>
+          <p style={{ fontSize: '0.8rem' }}>Real-time Collaboration</p>
+        </div>
+      </div>
+      
+      <div style={{ flex: 1, padding: '1rem', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+        {messengerMessages.length === 0 ? (
+          <div style={{ flex: 1, display: 'grid', placeItems: 'center', opacity: 0.3 }}>
+            <div style={{ textAlign: 'center' }}>
+              <MessageSquare size={48} style={{ margin: '0 auto 1rem' }} />
+              <p>No messages yet in this session.</p>
+            </div>
+          </div>
+        ) : (
+          messengerMessages.map(m => (
+            <div 
+              key={m.id} 
+              style={{ 
+                alignSelf: m.senderId === currentUser?.id ? 'flex-end' : 'flex-start',
+                maxWidth: '85%',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: '4px'
+              }}
+            >
+              <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', textAlign: m.senderId === currentUser?.id ? 'right' : 'left' }}>
+                {m.senderName} • {m.timestamp}
+              </div>
+              <div style={{ 
+                padding: '10px 14px', 
+                borderRadius: '16px', 
+                background: m.senderId === currentUser?.id ? 'var(--accent-primary)' : 'rgba(255,255,255,0.05)',
+                color: m.senderId === currentUser?.id ? 'white' : 'var(--text-primary)',
+                fontSize: '0.9rem',
+                wordBreak: 'break-word',
+                border: m.senderId === currentUser?.id ? 'none' : '1px solid var(--glass-border)',
+                borderBottomRightRadius: m.senderId === currentUser?.id ? '4px' : '16px',
+                borderBottomLeftRadius: m.senderId !== currentUser?.id ? '4px' : '16px'
+              }}>
+                {m.text}
+              </div>
+            </div>
+          ))
+        )}
+      </div>
+
+      <div style={{ padding: '1rem', borderTop: '1px solid var(--glass-border)', background: 'rgba(0,0,0,0.2)' }}>
+        <form onSubmit={handleSendMessage} style={{ display: 'flex', gap: '8px' }}>
+          <input 
+            type="text" 
+            className="terminal-input" 
+            placeholder="Type your message..." 
+            value={messengerInput}
+            onChange={e => setMessengerInput(e.target.value)}
+            style={{ borderRadius: '20px', padding: '10px 18px' }}
+          />
+          <button 
+            type="submit" 
+            disabled={!messengerInput.trim()}
+            className="btn-primary" 
+            style={{ width: '42px', height: '42px', padding: 0, justifyContent: 'center', borderRadius: '50%', flexShrink: 0 }}
+          >
+            <Zap size={18} />
+          </button>
+        </form>
+      </div>
+    </div>
+  );
 
   const renderDashboard = () => (
     <div className="animate-fade-in">
@@ -1267,6 +2040,8 @@ const App: React.FC = () => {
     switch (type) {
       case 'dashboard': return renderDashboard();
       case 'kanban': return renderKanban();
+      case 'meetings': return renderMeetings();
+      case 'messenger': return renderMessenger();
       case 'reports': return renderHistory();
       case 'users': return isAdmin ? <UserManagement currentUserId={currentUser?.id} /> : <div className="card">Unauthorized Access</div>;
       case 'settings': return renderSettings();
@@ -1283,7 +2058,7 @@ const App: React.FC = () => {
   const renderLandingPage = () => (
     <div className="landing-page">
       <div className="landing-nav">
-        <div className="logo-section" onClick={() => setShowLogin(true)} style={{ marginBottom: 0, cursor: 'pointer' }}><img src="/logo.png" alt="Rising Tech Logo" style={{ height: '45px', width: 'auto' }} /></div>
+        <div className="logo-section" style={{ marginBottom: 0 }}><img src="/logo.png" alt="Rising Tech Logo" style={{ height: '45px', width: 'auto' }} /></div>
       </div>
       <div className="hero-section">
         <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.6 }} className="hero-content">
@@ -1360,16 +2135,47 @@ const App: React.FC = () => {
   );
 
   const renderLogin = () => (
-    <div className="modal-backdrop" onClick={e => { if (e.target === e.currentTarget) setShowLogin(false); }}>
-      <div className="card animate-fade-in" style={{ width: '100%', maxWidth: '400px', padding: '3rem', position: 'relative' }}>
-        <button onClick={() => setShowLogin(false)} style={{ position: 'absolute', top: '15px', right: '15px', background: 'transparent', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer', fontSize: '1.2rem' }}>✕</button>
-        <div style={{ textAlign: 'center', marginBottom: '2.5rem' }}><img src="/logo.png" alt="Logo" style={{ height: '80px', margin: '0 auto 1.5rem' }} /><h2 style={{ fontSize: '1.75rem', marginBottom: '0.5rem' }}>Terminal Access</h2><p style={{ color: 'var(--text-secondary)' }}>Rising Tech Innovation Hub</p></div>
-        <form onSubmit={handleLogin}>
+    <div className="modal-backdrop" onClick={e => { if (e.target === e.currentTarget && !isVoiceActive) setShowLogin(false); }}>
+      <div className="card animate-fade-in" style={{ width: '100%', maxWidth: '400px', padding: '3rem', position: 'relative', overflow: 'hidden' }}>
+        <button onClick={() => setShowLogin(false)} disabled={isVoiceActive} style={{ position: 'absolute', top: '15px', right: '15px', background: 'transparent', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer', fontSize: '1.2rem', opacity: isVoiceActive ? 0.5 : 1 }}>✕</button>
+        <div style={{ textAlign: 'center', marginBottom: '2.5rem' }}>
+          {isVoiceActive ? (
+            <motion.div initial={{ scale: 0.8, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} className="voice-active-indicator" style={{ height: '80px', width: '80px', margin: '0 auto 1.5rem', background: 'rgba(59, 130, 246, 0.1)', borderRadius: '50%', display: 'grid', placeItems: 'center', border: '2px solid var(--accent-primary)', boxShadow: '0 0 30px rgba(59, 130, 246, 0.4)' }}>
+              <Mic size={40} className="text-accent" style={{ animation: 'pulse 1.5s infinite' }} />
+            </motion.div>
+          ) : (
+            <img src="/logo.png" alt="Logo" style={{ height: '80px', margin: '0 auto 1.5rem' }} />
+          )}
+          <h2 style={{ fontSize: '1.75rem', marginBottom: '0.5rem' }}>{isVoiceActive ? 'AI Voice Activation' : 'Terminal Access'}</h2>
+          <p style={{ color: isVoiceActive ? 'var(--accent-primary)' : 'var(--text-secondary)' }}>{isVoiceActive ? voiceTranscript : 'Rising Tech Innovation Hub'}</p>
+        </div>
+        
+        <form onSubmit={handleLogin} style={{ display: isVoiceActive ? 'none' : 'block' }}>
           <div className="input-group"><label style={{ display: 'flex', alignItems: 'center', gap: '8px' }}><User size={14} /> Username</label><input type="text" className="terminal-input" placeholder="operator id" value={loginForm.username} onChange={e => setLoginForm({ ...loginForm, username: e.target.value })} required /></div>
           <div className="input-group"><label style={{ display: 'flex', alignItems: 'center', gap: '8px' }}><Lock size={14} /> Password</label><input type="password" className="terminal-input" placeholder="security key" value={loginForm.password} onChange={e => setLoginForm({ ...loginForm, password: e.target.value })} required /></div>
-          <button type="submit" className="btn-primary" style={{ width: '100%', justifyContent: 'center', marginTop: '1rem' }}>Authenticate</button>
-          <AnimatePresence>{authError && <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} style={{ marginTop: '1.5rem', padding: '1rem', background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.2)', borderRadius: '12px', color: '#f87171', fontSize: '0.85rem', display: 'flex', alignItems: 'center', gap: '10px' }}><AlertCircle size={16} />{authError}</motion.div>}</AnimatePresence>
+          <button id="login-btn" type="submit" className="btn-primary" style={{ width: '100%', justifyContent: 'center', marginTop: '1rem' }}>Authenticate</button>
         </form>
+
+        {!isVoiceActive && (
+          <div style={{ marginTop: '1.5rem', textAlign: 'center' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px', color: 'var(--text-muted)', fontSize: '0.8rem', marginBottom: '1rem' }}>
+              <div style={{ flex: 1, height: '1px', background: 'var(--glass-border)' }} />
+              <span>OR</span>
+              <div style={{ flex: 1, height: '1px', background: 'var(--glass-border)' }} />
+            </div>
+            <button onClick={handleVoiceLogin} type="button" className="btn-primary" style={{ width: '100%', justifyContent: 'center', background: 'rgba(139,92,246,0.1)', color: '#a78bfa', boxShadow: 'none', border: '1px solid rgba(139,92,246,0.3)' }}>
+              <Bot size={16} /> AI Voice Verify
+            </button>
+          </div>
+        )}
+
+        <AnimatePresence>
+          {authError && (
+            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} style={{ marginTop: '1.5rem', padding: '1rem', background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.2)', borderRadius: '12px', color: '#f87171', fontSize: '0.85rem', display: 'flex', alignItems: 'center', gap: '10px' }}>
+              <AlertCircle size={16} />{authError}
+            </motion.div>
+          )}
+        </AnimatePresence>
       </div>
     </div>
   );

@@ -140,3 +140,32 @@ VALUES
 INSERT INTO public.app_users (username, password, full_name, email, role)
 VALUES 
 ('risingtech', 'rising@tech@innovations', 'Rising Tech Admin', 'admin@risingtech.innovation', 'admin');
+
+-- 8. Create MESSENGER MESSAGES Table
+CREATE TABLE IF NOT EXISTS public.messenger_messages (
+    id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+    text TEXT NOT NULL,
+    sender_id UUID REFERENCES public.app_users(id),
+    sender_name TEXT NOT NULL,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
+);
+
+ALTER TABLE public.messenger_messages ENABLE ROW LEVEL SECURITY;
+
+-- 9. Create MEETING SIGNALS Table (WebRTC Signaling)
+CREATE TABLE IF NOT EXISTS public.meeting_signals (
+    id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+    sender_id UUID REFERENCES public.app_users(id),
+    receiver_id UUID, -- NULL for broadcast/initial offer
+    type TEXT NOT NULL, -- 'offer', 'answer', 'candidate'
+    data JSONB NOT NULL,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
+);
+
+ALTER TABLE public.meeting_signals ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "Public: Full access to signals"
+ON public.meeting_signals FOR ALL
+TO public
+USING (true)
+WITH CHECK (true);

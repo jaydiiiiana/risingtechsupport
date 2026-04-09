@@ -30,6 +30,14 @@ type ResizeDir = 'n' | 's' | 'e' | 'w' | 'ne' | 'nw' | 'se' | 'sw' | null;
 const MIN_W = 480;
 const MIN_H = 320;
 
+const getPointer = (e: MouseEvent | TouchEvent | React.MouseEvent | React.TouchEvent) => {
+  if ('touches' in e) {
+    const t = e.touches[0] || (e as TouchEvent).changedTouches?.[0];
+    return { x: t.clientX, y: t.clientY };
+  }
+  return { x: (e as MouseEvent).clientX, y: (e as MouseEvent).clientY };
+};
+
 const MacWindow: React.FC<MacWindowProps> = ({
   title, icon, children,
   isMinimized, isFullscreen, isFocused,
@@ -53,37 +61,42 @@ const MacWindow: React.FC<MacWindowProps> = ({
     }
   }, [isFullscreen]);
 
-  const handleDragStart = useCallback((e: React.MouseEvent) => {
+  // Unified drag start (mouse + touch)
+  const handleDragStart = useCallback((e: React.MouseEvent | React.TouchEvent) => {
     if (isFullscreen) return;
     onFocus();
     setIsDragging(true);
-    dragOffset.current = { x: e.clientX - win.x, y: e.clientY - win.y };
+    const p = getPointer(e as any);
+    dragOffset.current = { x: p.x - win.x, y: p.y - win.y };
   }, [win.x, win.y, isFullscreen, onFocus]);
 
-  const handleResizeStart = useCallback((e: React.MouseEvent, dir: ResizeDir) => {
+  // Unified resize start (mouse + touch)
+  const handleResizeStart = useCallback((e: React.MouseEvent | React.TouchEvent, dir: ResizeDir) => {
     e.stopPropagation();
     e.preventDefault();
     if (isFullscreen) return;
     onFocus();
     setResizeDir(dir);
-    resizeStart.current = { x: e.clientX, y: e.clientY, winX: win.x, winY: win.y, winW: win.width, winH: win.height };
+    const p = getPointer(e as any);
+    resizeStart.current = { x: p.x, y: p.y, winX: win.x, winY: win.y, winW: win.width, winH: win.height };
   }, [isFullscreen, onFocus, win]);
 
   useEffect(() => {
     if (!isDragging && !resizeDir) return;
 
-    const handleMouseMove = (e: MouseEvent) => {
+    const handleMove = (e: MouseEvent | TouchEvent) => {
+      const p = getPointer(e);
       if (isDragging) {
         setWin(prev => ({
           ...prev,
-          x: e.clientX - dragOffset.current.x,
-          y: Math.max(32, e.clientY - dragOffset.current.y)
+          x: p.x - dragOffset.current.x,
+          y: Math.max(32, p.y - dragOffset.current.y)
         }));
       }
       if (resizeDir) {
         const s = resizeStart.current;
-        const dx = e.clientX - s.x;
-        const dy = e.clientY - s.y;
+        const dx = p.x - s.x;
+        const dy = p.y - s.y;
 
         setWin(() => {
           let { winX: x, winY: y, winW: w, winH: h } = s;
@@ -106,16 +119,25 @@ const MacWindow: React.FC<MacWindowProps> = ({
       }
     };
 
-    const handleMouseUp = () => {
+    const handleEnd = () => {
       setIsDragging(false);
       setResizeDir(null);
     };
 
-    window.addEventListener('mousemove', handleMouseMove);
-    window.addEventListener('mouseup', handleMouseUp);
+    // Mouse events
+    window.addEventListener('mousemove', handleMove);
+    window.addEventListener('mouseup', handleEnd);
+    // Touch events
+    window.addEventListener('touchmove', handleMove, { passive: false });
+    window.addEventListener('touchend', handleEnd);
+    window.addEventListener('touchcancel', handleEnd);
+
     return () => {
-      window.removeEventListener('mousemove', handleMouseMove);
-      window.removeEventListener('mouseup', handleMouseUp);
+      window.removeEventListener('mousemove', handleMove);
+      window.removeEventListener('mouseup', handleEnd);
+      window.removeEventListener('touchmove', handleMove);
+      window.removeEventListener('touchend', handleEnd);
+      window.removeEventListener('touchcancel', handleEnd);
     };
   }, [isDragging, resizeDir]);
 
@@ -135,27 +157,27 @@ const MacWindow: React.FC<MacWindowProps> = ({
   if (isMinimized) return null;
 
   const style: React.CSSProperties = { ...baseStyle };
-  const H = 8;
+  const H = 12; // Slightly larger touch targets for tablet
 
   return (
-    <div className={cls} style={style} onMouseDown={() => { if (!isMinimized) onFocus(); }}>
-      {/* All-edge Resize Handles */}
+    <div className={cls} style={style} onMouseDown={() => { if (!isMinimized) onFocus(); }} onTouchStart={() => { if (!isMinimized) onFocus(); }}>
+      {/* All-edge Resize Handles — supports both mouse + touch */}
       {!isFullscreen && !isMinimized && (
         <>
-          <div style={{ position: 'absolute', top: 0, left: H, right: H, height: H, cursor: 'ns-resize', zIndex: 10 }} onMouseDown={e => handleResizeStart(e, 'n')} />
-          <div style={{ position: 'absolute', bottom: 0, left: H, right: H, height: H, cursor: 'ns-resize', zIndex: 10 }} onMouseDown={e => handleResizeStart(e, 's')} />
-          <div style={{ position: 'absolute', top: H, left: 0, bottom: H, width: H, cursor: 'ew-resize', zIndex: 10 }} onMouseDown={e => handleResizeStart(e, 'w')} />
-          <div style={{ position: 'absolute', top: H, right: 0, bottom: H, width: H, cursor: 'ew-resize', zIndex: 10 }} onMouseDown={e => handleResizeStart(e, 'e')} />
-          <div style={{ position: 'absolute', top: 0, left: 0, width: H * 2, height: H * 2, cursor: 'nwse-resize', zIndex: 11 }} onMouseDown={e => handleResizeStart(e, 'nw')} />
-          <div style={{ position: 'absolute', top: 0, right: 0, width: H * 2, height: H * 2, cursor: 'nesw-resize', zIndex: 11 }} onMouseDown={e => handleResizeStart(e, 'ne')} />
-          <div style={{ position: 'absolute', bottom: 0, left: 0, width: H * 2, height: H * 2, cursor: 'nesw-resize', zIndex: 11 }} onMouseDown={e => handleResizeStart(e, 'sw')} />
-          <div style={{ position: 'absolute', bottom: 0, right: 0, width: H * 2, height: H * 2, cursor: 'nwse-resize', zIndex: 11 }} onMouseDown={e => handleResizeStart(e, 'se')} />
+          <div style={{ position: 'absolute', top: 0, left: H, right: H, height: H, cursor: 'ns-resize', zIndex: 10 }} onMouseDown={e => handleResizeStart(e, 'n')} onTouchStart={e => handleResizeStart(e, 'n')} />
+          <div style={{ position: 'absolute', bottom: 0, left: H, right: H, height: H, cursor: 'ns-resize', zIndex: 10 }} onMouseDown={e => handleResizeStart(e, 's')} onTouchStart={e => handleResizeStart(e, 's')} />
+          <div style={{ position: 'absolute', top: H, left: 0, bottom: H, width: H, cursor: 'ew-resize', zIndex: 10 }} onMouseDown={e => handleResizeStart(e, 'w')} onTouchStart={e => handleResizeStart(e, 'w')} />
+          <div style={{ position: 'absolute', top: H, right: 0, bottom: H, width: H, cursor: 'ew-resize', zIndex: 10 }} onMouseDown={e => handleResizeStart(e, 'e')} onTouchStart={e => handleResizeStart(e, 'e')} />
+          <div style={{ position: 'absolute', top: 0, left: 0, width: H * 2, height: H * 2, cursor: 'nwse-resize', zIndex: 11 }} onMouseDown={e => handleResizeStart(e, 'nw')} onTouchStart={e => handleResizeStart(e, 'nw')} />
+          <div style={{ position: 'absolute', top: 0, right: 0, width: H * 2, height: H * 2, cursor: 'nesw-resize', zIndex: 11 }} onMouseDown={e => handleResizeStart(e, 'ne')} onTouchStart={e => handleResizeStart(e, 'ne')} />
+          <div style={{ position: 'absolute', bottom: 0, left: 0, width: H * 2, height: H * 2, cursor: 'nesw-resize', zIndex: 11 }} onMouseDown={e => handleResizeStart(e, 'sw')} onTouchStart={e => handleResizeStart(e, 'sw')} />
+          <div style={{ position: 'absolute', bottom: 0, right: 0, width: H * 2, height: H * 2, cursor: 'nwse-resize', zIndex: 11 }} onMouseDown={e => handleResizeStart(e, 'se')} onTouchStart={e => handleResizeStart(e, 'se')} />
         </>
       )}
 
-      {/* Title Bar */}
-      <div className={`window-titlebar${isDragging ? ' dragging' : ''}`} style={{ position: 'relative', zIndex: 20 }} onMouseDown={handleDragStart} onDoubleClick={onFullscreen}>
-        <div className="traffic-lights" onMouseDown={e => e.stopPropagation()} onClick={e => e.stopPropagation()}>
+      {/* Title Bar — draggable via mouse + touch */}
+      <div className={`window-titlebar${isDragging ? ' dragging' : ''}`} style={{ position: 'relative', zIndex: 20 }} onMouseDown={handleDragStart} onTouchStart={handleDragStart} onDoubleClick={onFullscreen}>
+        <div className="traffic-lights" onMouseDown={e => e.stopPropagation()} onClick={e => e.stopPropagation()} onTouchStart={e => e.stopPropagation()}>
           <div className="traffic-light close" onClick={(e) => { e.stopPropagation(); onClose(); }}>
             <svg viewBox="0 0 12 12"><path d="M3.5 3.5l5 5M8.5 3.5l-5 5" stroke="currentColor" strokeWidth="1.5" fill="none" /></svg>
           </div>
