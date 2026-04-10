@@ -147,6 +147,7 @@ CREATE TABLE IF NOT EXISTS public.messenger_messages (
     text TEXT NOT NULL,
     sender_id UUID REFERENCES public.app_users(id),
     sender_name TEXT NOT NULL,
+    receiver_id UUID, -- NULL for Team Global
     created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
 );
 

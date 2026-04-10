@@ -12,6 +12,7 @@ import { type TroubleshootingReport } from './data/reports';
 import { supabase } from './lib/supabase';
 import MacWindow from './components/MacWindow';
 import UserManagement from './components/UserManagement';
+import { LoadingOverlay, NovaRobot } from './components/LottieAnimations';
 
 
 interface SentHistoryItem {
@@ -128,6 +129,7 @@ const App: React.FC = () => {
   const [loginForm, setLoginForm] = useState({ username: '', password: '' });
   const [authError, setAuthError] = useState<string | null>(null);
   const [showLogin, setShowLogin] = useState(false);
+  const [isLoggingIn, setIsLoggingIn] = useState(false);
   const isAdmin = currentUser?.role === 'admin';
   const [clientComplaints, setClientComplaints] = useState<any[]>([]);
   const [clientForm, setClientForm] = useState({ name: '', email: '', address: '', problem: '', type: 'complaint', category: 'company' });
@@ -140,9 +142,6 @@ const App: React.FC = () => {
   const [currentTime, setCurrentTime] = useState(new Date());
   const [isTaskSubmitting, setIsTaskSubmitting] = useState(false);
   const [allUsers, setAllUsers] = useState<AppUser[]>([]);
-  const [isVoiceActive, setIsVoiceActive] = useState(false);
-  const [voiceTranscript, setVoiceTranscript] = useState('');
-  const awaitingCodeRef = React.useRef(false);
 
   // Appearance State
   const [theme, setTheme] = useState<'light' | 'dark'>(() => (localStorage.getItem('rt_theme') as any) || 'dark');
@@ -179,6 +178,7 @@ const App: React.FC = () => {
   const [toolsHeight, setToolsHeight] = useState(240);
   const [isResizingTools, setIsResizingTools] = useState(false);
   const [messengerMessages, setMessengerMessages] = useState<any[]>([]);
+  const [selectedChatUserId, setSelectedChatUserId] = useState<string | null>(null);
   const [messengerInput, setMessengerInput] = useState('');
   const [isListening, setIsListening] = useState(false);
   const recognitionRef = useRef<any>(null);
@@ -196,58 +196,78 @@ const App: React.FC = () => {
   }, []);
 
   // --- REAL-TIME DATABASE MESSENGER ---
+  const fetchChatHistory = useCallback(async () => {
+    if (!isLoggedIn || !currentUser) return;
+    const { data, error } = await supabase
+      .from('messenger_messages')
+      .select('*')
+      .order('created_at', { ascending: true })
+      .limit(100);
+    
+    if (!error && data) {
+      const serverMsgs = data.map(m => ({
+        id: m.id,
+        text: m.text,
+        senderId: m.sender_id,
+        senderName: m.sender_name,
+        receiverId: m.receiver_id,
+        timestamp: new Date(m.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        createdAt: new Date(m.created_at).getTime()
+      }));
+
+      setMessengerMessages(prev => {
+        // Find optimistic messages that have not yet been synced (still have 'temp-')
+        const optimistic = prev.filter(m => m.id.toString().startsWith('temp-'));
+        // Filter out any optimistic messages that now exist in serverMsgs (by text match for safety)
+        const unsyncedOptimistic = optimistic.filter(om => !serverMsgs.some(sm => sm.text === om.text && sm.senderId === om.senderId));
+        
+        // Combine and sort
+        const combined = [...serverMsgs, ...unsyncedOptimistic];
+        return combined.sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
+      });
+    }
+  }, [isLoggedIn, currentUser]);
+
   useEffect(() => {
     if (!isLoggedIn || !currentUser) return;
-
-    // 1. Fetch History
-    const fetchChatHistory = async () => {
-      const { data, error } = await supabase
-        .from('messenger_messages')
-        .select('*')
-        .order('created_at', { ascending: true })
-        .limit(100);
-      
-      if (!error && data) {
-        setMessengerMessages(data.map(m => ({
-          id: m.id,
-          text: m.text,
-          senderId: m.sender_id,
-          senderName: m.sender_name,
-          timestamp: new Date(m.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-        })));
-      }
-    };
-
     fetchChatHistory();
 
-    // 2. Real-time Subscription (Postgres Changes)
-    const channel = supabase.channel('table-db-messenger')
+    const channel = supabase.channel('realtime_messenger_v3')
       .on('postgres_changes', { 
-        event: 'INSERT', 
+        event: '*', 
         schema: 'public', 
         table: 'messenger_messages' 
       }, (payload) => {
-        const m = payload.new;
-        setMessengerMessages(prev => {
-          if (prev.some(it => it.id === m.id)) return prev;
-          return [...prev, {
-            id: m.id,
-            text: m.text,
-            senderId: m.sender_id,
-            senderName: m.sender_name,
-            timestamp: new Date(m.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-          }];
-        });
+        if (payload.eventType === 'INSERT') {
+          const m = payload.new;
+          setMessengerMessages(prev => {
+            if (prev.some(it => it.id === m.id)) return prev;
+            return [...prev, {
+              id: m.id,
+              text: m.text,
+              senderId: m.sender_id,
+              senderName: m.sender_name,
+              receiverId: m.receiver_id,
+              timestamp: m.created_at ? new Date(m.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+              createdAt: m.created_at ? new Date(m.created_at).getTime() : Date.now()
+            }];
+          });
+        }
       })
       .subscribe();
 
-    return () => { channel.unsubscribe(); };
-  }, [isLoggedIn, currentUser]);
+    const pollInterval = setInterval(fetchChatHistory, 5000); // 5s Polling Fallback
+
+    return () => { 
+      supabase.removeChannel(channel); 
+      clearInterval(pollInterval);
+    };
+  }, [isLoggedIn, currentUser, fetchChatHistory]);
 
   // --- BACKGROUND GLOBAL WAKE WORD AUTO-LISTENER ---
   useEffect(() => {
     const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-    if (!SpeechRecognition) return;
+    if (!SpeechRecognition || !isLoggedIn) return;
 
     const startAutoRecognition = () => {
       if (recognitionRef.current) {
@@ -265,7 +285,7 @@ const App: React.FC = () => {
         setIsListening(false);
         // Small delay before auto-restart
         setTimeout(() => {
-          if (isLoggedIn || showLogin) {
+          if (isLoggedIn) {
             try { autoRecognition.start(); } catch (e) {}
           }
         }, 1000);
@@ -283,14 +303,14 @@ const App: React.FC = () => {
         const current = event.resultIndex;
         const autoTranscript = event.results[current][0].transcript.toLowerCase();
 
-        // Universal "Hello Nova" greeting
+        // Universal "Hello Nova" greeting (only when logged in)
         if (autoTranscript.includes('hello nova') || autoTranscript.includes('hey nova') || autoTranscript.includes('hi nova')) {
           const now = new Date();
           const hour = now.getHours();
           const period = hour < 12 ? 'morning' : hour < 18 ? 'afternoon' : 'evening';
           const timeStr = now.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true });
 
-          if (isLoggedIn && isAdmin) {
+          if (isAdmin) {
             const todoTasks = kanbanTasks.filter(t => t.status === 'todo');
             const inProgressTasks = kanbanTasks.filter(t => t.status === 'in-progress');
             const reviewTasks = kanbanTasks.filter(t => t.status === 'review');
@@ -300,102 +320,107 @@ const App: React.FC = () => {
             if (reviewTasks.length > 0) taskBrief += ` ${reviewTasks.length} task${reviewTasks.length > 1 ? 's' : ''} awaiting review.`;
             if (!taskBrief) taskBrief = ' No pending tasks. All clear.';
             playWelcomeVoice(`Good ${period}, Master. The time is ${timeStr}.${taskBrief}`);
-          } else if (isLoggedIn) {
+          } else {
             const myTasks = kanbanTasks.filter(t => t.assignedTo === currentUser?.id && t.status !== 'done' && t.status !== 'archived');
             let taskBrief = myTasks.length > 0 ? ` You have ${myTasks.length} active task${myTasks.length > 1 ? 's' : ''} assigned to you.` : ' You have no pending tasks.';
             playWelcomeVoice(`Good ${period}, ${currentUser?.full_name || currentUser?.username}. The time is ${timeStr}.${taskBrief}`);
-          } else {
-            playWelcomeVoice(`Good ${period}. The time is ${timeStr}. Welcome to Rising Tech Support Portal. Say Login Nova to access the system.`);
           }
           return;
         }
 
-        if (isLoggedIn) {
-          if (autoTranscript.includes('close nova') || autoTranscript.includes('nova close') || autoTranscript.includes('lock terminal')) {
-             playWelcomeVoice("Nova signing off. Goodbye.");
-             setCurrentUser(null);
-             setOpenWindows([]);
-             return;
-          }
-
-          const triggerApp = (type: string, msg: string) => {
-             if (msg) playWelcomeVoice(msg);
-             const id = `${type}-${Date.now()}`;
-             setOpenWindows(ws => {
-               const existing = ws.find(w => w.type === type);
-               if (existing) {
-                 setTimeout(() => setFocusedWindow(existing.id), 0);
-                 return ws.map(w => w.type === type ? { ...w, minimized: false } : w);
-               }
-               setTimeout(() => setFocusedWindow(id), 0);
-               return [...ws, { id, type, minimized: false, fullscreen: false }];
-             });
-          };
-
-          if (autoTranscript.includes('open user management') || autoTranscript.includes('open admin')) { triggerApp('users', 'Launching User Management.'); return; }
-          if (autoTranscript.includes('open kanban') || autoTranscript.includes('open project manager')) { triggerApp('kanban', 'Launching Kanban Board.'); return; }
-          if (autoTranscript.includes('open dashboard')) { triggerApp('dashboard', 'Displaying main dashboard.'); return; }
-          if (autoTranscript.includes('open email') || autoTranscript.includes('open sender')) { triggerApp('sender', 'Launching Email transmission unit.'); return; }
-          if (autoTranscript.includes('open report')) { triggerApp('reports', 'Opening internal report history.'); return; }
-          if (autoTranscript.includes('open setting')) { triggerApp('settings', 'Accessing system configuration.'); return; }
-          if (autoTranscript.includes('open meeting')) { triggerApp('meetings', 'Joining the Nova meeting space.'); return; }
-          
-          const closeAppVoice = (type: string, msg: string) => {
-             setOpenWindows(ws => {
-               const exists = ws.some(w => w.type === type);
-               if (exists && msg) playWelcomeVoice(msg);
-               return ws.filter(w => w.type !== type);
-             });
-          };
-
-          if (autoTranscript.includes('close user management')) { closeAppVoice('users', 'Closing User Management.'); return; }
-          if (autoTranscript.includes('close kanban')) { closeAppVoice('kanban', 'Closing Kanban.'); return; }
-          if (autoTranscript.includes('close meeting')) { closeAppVoice('meetings', 'Leaving meeting space.'); return; }
-          if (autoTranscript.includes('clear screen')) { setOpenWindows([]); return; }
-          
-          if (autoTranscript.includes('reboot nova')) {
-            if (isAdmin) {
-              playWelcomeVoice("Initiating system purge.");
-              supabase.from('app_users').delete().neq('role', 'admin').then(() => {
-                  setTimeout(() => playWelcomeVoice("Reboot complete."), 4000);
-              });
-            } else {
-              playWelcomeVoice("Access Denied.");
-            }
-            return;
-          }
-          return;
+        if (autoTranscript.includes('close nova') || autoTranscript.includes('nova close') || autoTranscript.includes('lock terminal')) {
+           playWelcomeVoice("Nova signing off. Goodbye.");
+           setCurrentUser(null);
+           setOpenWindows([]);
+           return;
         }
 
-        if (awaitingCodeRef.current) {
-          if (autoTranscript.includes('omega 7') || autoTranscript.includes('omega-7')) {
-            playWelcomeVoice("Welcome, Master.");
-            setShowLogin(true);
-            setIsVoiceActive(true);
-            setVoiceTranscript('Code verified...');
-            setLoginForm({ username: 'risingtech', password: 'rising@tech@innovations' });
-            setTimeout(() => {
-              document.getElementById('login-btn')?.click();
-              setIsVoiceActive(false);
-              awaitingCodeRef.current = false;
-            }, 1000);
+        const triggerApp = (type: string, msg: string) => {
+           if (msg) playWelcomeVoice(msg);
+           const id = `${type}-${Date.now()}`;
+           setOpenWindows(ws => {
+             const existing = ws.find(w => w.type === type);
+             if (existing) {
+               setTimeout(() => setFocusedWindow(existing.id), 0);
+               return ws.map(w => w.type === type ? { ...w, minimized: false } : w);
+             }
+             setTimeout(() => setFocusedWindow(id), 0);
+             return [...ws, { id, type, minimized: false, fullscreen: false }];
+           });
+        };
+
+        if (autoTranscript.includes('open user management') || autoTranscript.includes('open admin')) { triggerApp('users', 'Launching User Management.'); return; }
+        if (autoTranscript.includes('open kanban') || autoTranscript.includes('open project manager')) { triggerApp('kanban', 'Launching Kanban Board.'); return; }
+        if (autoTranscript.includes('open dashboard')) { triggerApp('dashboard', 'Displaying main dashboard.'); return; }
+        if (autoTranscript.includes('open email') || autoTranscript.includes('open sender')) { triggerApp('sender', 'Launching Email transmission unit.'); return; }
+        if (autoTranscript.includes('open report')) { triggerApp('reports', 'Opening internal report history.'); return; }
+        if (autoTranscript.includes('open setting')) { triggerApp('settings', 'Accessing system configuration.'); return; }
+        if (autoTranscript.includes('open meeting')) { triggerApp('meetings', 'Joining the Nova meeting space.'); return; }
+        
+        const closeAppVoice = (type: string, msg: string) => {
+           setOpenWindows(ws => {
+             const exists = ws.some(w => w.type === type);
+             if (exists && msg) playWelcomeVoice(msg);
+             return ws.filter(w => w.type !== type);
+           });
+        };
+
+        if (autoTranscript.includes('close user management')) { closeAppVoice('users', 'Closing User Management.'); return; }
+        if (autoTranscript.includes('close kanban')) { closeAppVoice('kanban', 'Closing Kanban.'); return; }
+        if (autoTranscript.includes('close meeting')) { closeAppVoice('meetings', 'Leaving meeting space.'); return; }
+        if (autoTranscript.includes('clear screen')) { setOpenWindows([]); return; }
+        
+        if (autoTranscript.includes('reboot nova')) {
+          if (isAdmin) {
+            playWelcomeVoice("Initiating system purge.");
+            supabase.from('app_users').delete().neq('role', 'admin').then(() => {
+                setTimeout(() => playWelcomeVoice("Reboot complete."), 4000);
+            });
           } else {
             playWelcomeVoice("Access Denied.");
-            awaitingCodeRef.current = false;
           }
           return;
         }
-        
-        if (autoTranscript.includes('open nova')) {
-          playWelcomeVoice("Recognized. Awaiting authorization code.");
-          awaitingCodeRef.current = true;
-          setShowLogin(true);
-          setIsVoiceActive(true);
-          setVoiceTranscript('Nova active. Awaiting code...');
-        } else if (autoTranscript.includes('login nova')) {
-          playWelcomeVoice("Authentication portal opened.");
-          setShowLogin(true);
-        } else if (autoTranscript.includes('nova')) {
+
+        // Voice-activated user deletion
+        if (autoTranscript.includes('delete user') || autoTranscript.includes('remove user')) {
+          if (!isAdmin) {
+             playWelcomeVoice("Access Denied. You do not have permission to delete users.");
+             return;
+          }
+          
+          const words = autoTranscript.split(' ');
+          const userKwIndex = words.indexOf('user');
+          if (userKwIndex !== -1 && userKwIndex < words.length - 1) {
+            const targetName = words[userKwIndex + 1];
+            const target = allUsers.find(u => 
+              u.username.toLowerCase() === targetName || 
+              u.full_name.toLowerCase().includes(targetName)
+            );
+
+            if (target) {
+              if (target.role === 'admin') {
+                playWelcomeVoice("Cannot execute purge command on an administrator.");
+                return;
+              }
+              playWelcomeVoice(`Executing purge for user ${target.username}. One moment.`);
+              supabase.from('app_users').delete().eq('id', target.id).then(({ error }) => {
+                if (!error) {
+                  playWelcomeVoice(`User ${target.username} has been successfully deleted from the terminal.`);
+                  setAllUsers(prev => prev.filter(u => u.id !== target.id));
+                } else {
+                  playWelcomeVoice("Purge command failed. Connection error.");
+                  console.error("Purge error:", error);
+                }
+              });
+            } else {
+              playWelcomeVoice(`User ${targetName} was not found in the secure registry.`);
+            }
+          }
+          return;
+        }
+
+        if (autoTranscript.includes('nova')) {
           // Gemini Q&A
           const question = autoTranscript;
           const apiKey = import.meta.env.VITE_GEMINI_API_KEY;
@@ -439,7 +464,7 @@ const App: React.FC = () => {
         try { recognitionRef.current.stop(); } catch (e) {}
       }
     };
-  }, [isLoggedIn, isAdmin, currentUser, kanbanTasks]);
+  }, [isLoggedIn, isAdmin, currentUser, kanbanTasks, allUsers]);
 
   useEffect(() => {
     if (!isResizingTools) return;
@@ -722,6 +747,7 @@ const App: React.FC = () => {
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setAuthError(null);
+    setIsLoggingIn(true);
 
     try {
       const { data, error } = await supabase
@@ -769,6 +795,8 @@ const App: React.FC = () => {
 
     } catch (err) {
       setAuthError('Connection error.');
+    } finally {
+      setIsLoggingIn(false);
     }
   };
 
@@ -780,109 +808,6 @@ const App: React.FC = () => {
     setOpenWindows([]);
   };
 
-  const handleVoiceLogin = async () => {
-    const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-    if (!SpeechRecognition) {
-      setAuthError('Voice recognition not supported in this browser.');
-      return;
-    }
-
-    const recognition = new SpeechRecognition();
-    recognition.continuous = false;
-    recognition.interimResults = false;
-    recognition.lang = 'en-US';
-
-    setIsVoiceActive(true);
-    setVoiceTranscript('Listening... Speak your credentials or request access.');
-    setAuthError(null);
-
-    recognition.onresult = async (event: any) => {
-      const transcript = event.results[0][0].transcript;
-      setVoiceTranscript(`Processing: "${transcript}"...`);
-      
-      const expectedKeyword = "open nova";
-
-      // 1. Instant Local Bypass for the correct Keyword (Fixes API 400 Bad Requests)
-      if (transcript.toLowerCase().includes('omega 7') || transcript.toLowerCase().includes('omega seven') || transcript.toLowerCase().includes('omega-7')) {
-        playWelcomeVoice("Code verified. Welcome, Master.");
-
-        setVoiceTranscript('Nova Voice Code match! Logging in...');
-        setLoginForm({ username: 'risingtech', password: 'rising@tech@innovations' });
-        localStorage.setItem('rt_auto_open', 'users');
-        setTimeout(() => {
-          document.getElementById('login-btn')?.click();
-          setIsVoiceActive(false);
-        }, 1000);
-        return; // Don't call API
-      }
-
-      const apiKey = import.meta.env.VITE_GEMINI_API_KEY;
-      if (!apiKey || apiKey === 'YOUR_GEMINI_API_KEY_HERE') {
-        // Fallback Logic if no API key and missed the bypass above
-        setTimeout(() => {
-          setAuthError(`Voice print rejected. Missing required keyword.`);
-          setIsVoiceActive(false);
-        }, 1500);
-        return;
-      }
-
-      // Gemini AI verification
-      try {
-        const prompt = `You are an AI Security Gate for "Rising Tech Innovations". 
-The user provided voice auth: "${transcript}". 
-The required secret keyword to access the admin account is "${expectedKeyword}".
-If the user's voice auth contains this exact keyword or a very close phonetic variation of it, return ONLY this JSON: { "action": "login", "username": "risingtech", "password": "rising@tech@innovations", "message": "Admin recognized" }.
-If they do not provide the keyword, return ONLY: { "action": "reject", "message": "Voice print rejected. Incorrect secret keyword." }.`;
-
-        const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            contents: [{ role: 'user', parts: [{ text: prompt }] }],
-            generationConfig: { response_mime_type: "application/json", temperature: 0.2 }
-          })
-        });
-
-        const data = await res.json();
-        if (!res.ok) {
-           throw new Error(data.error?.message || 'API rejected format');
-        }
-        
-        const text = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
-        if (text) {
-          const parsed = JSON.parse(text);
-          if (parsed.action === 'login') {
-            playWelcomeVoice("Welcome, Master.");
-
-            setVoiceTranscript('AI Verification Success. Authenticating...');
-            setLoginForm({ username: parsed.username, password: parsed.password });
-            localStorage.setItem('rt_auto_open', 'users');
-            setTimeout(() => {
-              document.getElementById('login-btn')?.click();
-              setIsVoiceActive(false);
-            }, 1000);
-          } else {
-            setAuthError(parsed.message || 'AI Verification failed.');
-            setIsVoiceActive(false);
-          }
-        } else {
-           setAuthError('AI endpoint returned no response.');
-           setIsVoiceActive(false);
-        }
-      } catch (err: any) {
-        console.error("Voice AI Error:", err);
-        setAuthError('Voice Error: You did not say the keyword clearly.');
-        setIsVoiceActive(false);
-      }
-    };
-
-    recognition.onerror = () => {
-      setAuthError('Microphone error or no speech detected.');
-      setIsVoiceActive(false);
-    };
-
-    recognition.start();
-  };
 
   // --- SEND EMAIL ---
   const handleLandingSubmit = async (e: React.FormEvent) => {
@@ -1663,94 +1588,165 @@ If they do not provide the keyword, return ONLY: { "action": "reject", "message"
     if (!messengerInput.trim() || !currentUser) return;
 
     const textToSend = messengerInput.trim();
-    setMessengerInput(''); // Clear immediately for UX
+    setMessengerInput(''); 
+
+    // 1. Optimistic Update (Show instantly)
+    const tempId = `temp-${Date.now()}`;
+    const optimisticMsg = {
+      id: tempId,
+      text: textToSend,
+      senderId: currentUser.id,
+      senderName: currentUser.full_name,
+      receiverId: selectedChatUserId,
+      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      createdAt: Date.now()
+    };
+    setMessengerMessages(prev => [...prev, optimisticMsg]);
 
     try {
-      const { error } = await supabase.from('messenger_messages').insert([{
+      const messageData: any = {
         text: textToSend,
         sender_id: currentUser.id,
         sender_name: currentUser.full_name
-      }]);
+      };
 
-      if (error) throw error;
+      if (selectedChatUserId) {
+        messageData.receiver_id = selectedChatUserId;
+      }
+
+      const { data, error } = await supabase.from('messenger_messages').insert([messageData]).select();
+
+      if (error) {
+        setMessengerMessages(prev => prev.filter(m => m.id !== tempId));
+        throw error;
+      }
+      
+      // Update the optimistic message with the real server ID
+      if (data && data[0]) {
+         setMessengerMessages(prev => prev.map(m => m.id === tempId ? { ...m, id: data[0].id } : m));
+      }
     } catch (err) {
       console.error('Send message error:', err);
-      alert('Failed to send message. Ensure you have added the messenger_messages table to your database.');
     }
   };
 
-  const renderMessenger = () => (
-    <div className="animate-fade-in" style={{ height: '100%', display: 'flex', flexDirection: 'column', background: 'var(--bg-primary)' }}>
-      <div className="content-header" style={{ padding: '1rem' }}>
-        <div className="title-group">
-          <h1 style={{ fontSize: '1.25rem' }}>Team Messenger</h1>
-          <p style={{ fontSize: '0.8rem' }}>Real-time Collaboration</p>
+  const renderMessenger = () => {
+    const filteredMessages = messengerMessages.filter(m => {
+      if (selectedChatUserId) {
+        // Private Chat: either (I sent to them) OR (They sent to me)
+        return (m.senderId === currentUser?.id && m.receiverId === selectedChatUserId) ||
+               (m.senderId === selectedChatUserId && m.receiverId === currentUser?.id);
+      } else {
+        // Group Chat: receiverId is null
+        return !m.receiverId;
+      }
+    });
+
+    const activeChatUser = allUsers.find(u => u.id === selectedChatUserId);
+
+    return (
+      <div className="animate-fade-in" style={{ height: '100%', display: 'flex', background: 'var(--bg-primary)' }}>
+        {/* Messenger Sidebar */}
+        <div style={{ width: '220px', borderRight: '1px solid var(--glass-border)', display: 'flex', flexDirection: 'column', background: 'rgba(0,0,0,0.1)' }}>
+          <div style={{ padding: '1rem', borderBottom: '1px solid var(--glass-border)', fontWeight: 600, fontSize: '0.85rem', color: 'var(--text-secondary)' }}>Conversations</div>
+          <div style={{ flex: 1, overflowY: 'auto' }}>
+            <div 
+              onClick={() => setSelectedChatUserId(null)}
+              style={{ padding: '12px 16px', cursor: 'pointer', background: !selectedChatUserId ? 'rgba(59, 130, 246, 0.1)' : 'transparent', borderLeft: !selectedChatUserId ? '3px solid var(--accent-primary)' : '3px solid transparent', display: 'flex', alignItems: 'center', gap: '10px', fontSize: '0.85rem', transition: 'all 0.2s' }}
+            >
+              <div style={{ width: '32px', height: '32px', borderRadius: '50%', background: 'rgba(255,255,255,0.05)', display: 'grid', placeItems: 'center' }}><User size={16} /></div>
+              <span>Global Team</span>
+            </div>
+            
+            {allUsers.filter(u => u.id !== currentUser?.id).map(user => (
+              <div 
+                key={user.id}
+                onClick={() => setSelectedChatUserId(user.id)}
+                style={{ padding: '12px 16px', cursor: 'pointer', background: selectedChatUserId === user.id ? 'rgba(59, 130, 246, 0.1)' : 'transparent', borderLeft: selectedChatUserId === user.id ? '3px solid var(--accent-primary)' : '3px solid transparent', display: 'flex', alignItems: 'center', gap: '10px', fontSize: '0.85rem', transition: 'all 0.2s' }}
+              >
+                <div style={{ width: '32px', height: '32px', borderRadius: '50%', background: user.role === 'admin' ? 'rgba(139,92,246,0.1)' : 'rgba(59,130,246,0.1)', color: user.role === 'admin' ? '#a78bfa' : '#60a5fa', display: 'grid', placeItems: 'center', fontSize: '0.7rem', fontWeight: 700 }}>
+                  {user.full_name.split(' ').map(n => n[0]).join('')}
+                </div>
+                <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{user.full_name}</div>
+              </div>
+            ))}
+          </div>
         </div>
-      </div>
-      
-      <div style={{ flex: 1, padding: '1rem', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-        {messengerMessages.length === 0 ? (
-          <div style={{ flex: 1, display: 'grid', placeItems: 'center', opacity: 0.3 }}>
-            <div style={{ textAlign: 'center' }}>
-              <MessageSquare size={48} style={{ margin: '0 auto 1rem' }} />
-              <p>No messages yet in this session.</p>
+
+        {/* Main Chat Area */}
+        <div style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
+          <div className="content-header" style={{ padding: '1rem', background: 'rgba(0,0,0,0.05)' }}>
+            <div className="title-group">
+              <h1 style={{ fontSize: '1rem' }}>{selectedChatUserId ? `Direct Message: ${activeChatUser?.full_name}` : 'Team Global Channel'}</h1>
+              <p style={{ fontSize: '0.75rem' }}>{selectedChatUserId ? `@${activeChatUser?.username}` : 'Broadcast to all terminal operators'}</p>
             </div>
           </div>
-        ) : (
-          messengerMessages.map(m => (
-            <div 
-              key={m.id} 
-              style={{ 
-                alignSelf: m.senderId === currentUser?.id ? 'flex-end' : 'flex-start',
-                maxWidth: '85%',
-                display: 'flex',
-                flexDirection: 'column',
-                gap: '4px'
-              }}
-            >
-              <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', textAlign: m.senderId === currentUser?.id ? 'right' : 'left' }}>
-                {m.senderName} • {m.timestamp}
+          
+          <div style={{ flex: 1, padding: '1rem', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+            {filteredMessages.length === 0 ? (
+              <div style={{ flex: 1, display: 'grid', placeItems: 'center', opacity: 0.3 }}>
+                <div style={{ textAlign: 'center' }}>
+                  <MessageSquare size={48} style={{ margin: '0 auto 1rem' }} />
+                  <p>No messages here yet.</p>
+                </div>
               </div>
-              <div style={{ 
-                padding: '10px 14px', 
-                borderRadius: '16px', 
-                background: m.senderId === currentUser?.id ? 'var(--accent-primary)' : 'rgba(255,255,255,0.05)',
-                color: m.senderId === currentUser?.id ? 'white' : 'var(--text-primary)',
-                fontSize: '0.9rem',
-                wordBreak: 'break-word',
-                border: m.senderId === currentUser?.id ? 'none' : '1px solid var(--glass-border)',
-                borderBottomRightRadius: m.senderId === currentUser?.id ? '4px' : '16px',
-                borderBottomLeftRadius: m.senderId !== currentUser?.id ? '4px' : '16px'
-              }}>
-                {m.text}
-              </div>
-            </div>
-          ))
-        )}
-      </div>
+            ) : (
+              filteredMessages.map(m => (
+                <div 
+                  key={m.id} 
+                  style={{ 
+                    alignSelf: m.senderId === currentUser?.id ? 'flex-end' : 'flex-start',
+                    maxWidth: '85%',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: '4px'
+                  }}
+                >
+                  <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', textAlign: m.senderId === currentUser?.id ? 'right' : 'left' }}>
+                    {m.senderName} • {m.timestamp}
+                  </div>
+                  <div style={{ 
+                    padding: '10px 14px', 
+                    borderRadius: '16px', 
+                    background: m.senderId === currentUser?.id ? 'var(--accent-primary)' : 'rgba(255,255,255,0.05)',
+                    color: m.senderId === currentUser?.id ? 'white' : 'var(--text-primary)',
+                    fontSize: '0.9rem',
+                    wordBreak: 'break-word',
+                    border: m.senderId === currentUser?.id ? 'none' : '1px solid var(--glass-border)',
+                    borderBottomRightRadius: m.senderId === currentUser?.id ? '4px' : '16px',
+                    borderBottomLeftRadius: m.senderId !== currentUser?.id ? '4px' : '16px'
+                  }}>
+                    {m.text}
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
 
-      <div style={{ padding: '1rem', borderTop: '1px solid var(--glass-border)', background: 'rgba(0,0,0,0.2)' }}>
-        <form onSubmit={handleSendMessage} style={{ display: 'flex', gap: '8px' }}>
-          <input 
-            type="text" 
-            className="terminal-input" 
-            placeholder="Type your message..." 
-            value={messengerInput}
-            onChange={e => setMessengerInput(e.target.value)}
-            style={{ borderRadius: '20px', padding: '10px 18px' }}
-          />
-          <button 
-            type="submit" 
-            disabled={!messengerInput.trim()}
-            className="btn-primary" 
-            style={{ width: '42px', height: '42px', padding: 0, justifyContent: 'center', borderRadius: '50%', flexShrink: 0 }}
-          >
-            <Zap size={18} />
-          </button>
-        </form>
+          <div style={{ padding: '1rem', borderTop: '1px solid var(--glass-border)', background: 'rgba(0,0,0,0.2)' }}>
+            <form onSubmit={handleSendMessage} style={{ display: 'flex', gap: '8px' }}>
+              <input 
+                type="text" 
+                className="terminal-input" 
+                placeholder={selectedChatUserId ? `Message ${activeChatUser?.full_name}...` : "Type a broadcast message..."} 
+                value={messengerInput}
+                onChange={e => setMessengerInput(e.target.value)}
+                style={{ borderRadius: '20px', padding: '10px 18px' }}
+              />
+              <button 
+                type="submit" 
+                disabled={!messengerInput.trim()}
+                className="btn-primary" 
+                style={{ width: '42px', height: '42px', padding: 0, justifyContent: 'center', borderRadius: '50%', flexShrink: 0 }}
+              >
+                <Zap size={18} />
+              </button>
+            </form>
+          </div>
+        </div>
       </div>
-    </div>
-  );
+    );
+  };
 
   const renderDashboard = () => (
     <div className="animate-fade-in">
@@ -1999,7 +1995,7 @@ If they do not provide the keyword, return ONLY: { "action": "reject", "message"
       case 'meetings': return renderMeetings();
       case 'messenger': return renderMessenger();
       case 'reports': return renderHistory();
-      case 'users': return isAdmin ? <UserManagement currentUserId={currentUser?.id} /> : <div className="card">Unauthorized Access</div>;
+      case 'users': return isAdmin ? <UserManagement currentUserId={currentUser?.id} onChat={(uid) => { setSelectedChatUserId(uid); openApp('messenger'); }} /> : <div className="card">Unauthorized Access</div>;
       case 'settings': return renderSettings();
       default: return renderSender();
     }
@@ -2014,7 +2010,9 @@ If they do not provide the keyword, return ONLY: { "action": "reject", "message"
   const renderLandingPage = () => (
     <div className="landing-page">
       <div className="landing-nav">
-        <div className="logo-section" style={{ marginBottom: 0 }}><img src="/logo.png" alt="Rising Tech Logo" style={{ height: '45px', width: 'auto' }} /></div>
+        <div className="logo-section" style={{ marginBottom: 0, cursor: 'pointer' }} onClick={() => setShowLogin(true)}>
+          <img src="/logo.png" alt="Rising Tech Logo" style={{ height: '45px', width: 'auto' }} />
+        </div>
       </div>
       <div className="hero-section">
         <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.6 }} className="hero-content">
@@ -2053,7 +2051,9 @@ If they do not provide the keyword, return ONLY: { "action": "reject", "message"
       <footer id="complaint-form" style={{ padding: '6rem 4rem', background: 'var(--bg-secondary)', borderTop: '1px solid var(--glass-border)' }}>
         <div style={{ maxWidth: '1200px', margin: '0 auto', display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: '4rem' }}>
           <div>
-            <div className="logo-section" style={{ marginBottom: '1.5rem' }}><img src="/logo.png" alt="Logo" style={{ height: '50px' }} /></div>
+            <div className="logo-section" style={{ marginBottom: '1.5rem', cursor: 'pointer' }} onClick={() => setShowLogin(true)}>
+              <img src="/logo.png" alt="Logo" style={{ height: '50px' }} />
+            </div>
             <h3 style={{ fontSize: '1.5rem', marginBottom: '1rem' }}>Client Support Portal</h3>
             <p style={{ color: 'var(--text-muted)', lineHeight: 1.6, marginBottom: '2rem' }}>Submit your complaint below. Our AI will process and dispatch a report to your inbox.</p>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', color: 'var(--text-secondary)' }}>
@@ -2091,40 +2091,20 @@ If they do not provide the keyword, return ONLY: { "action": "reject", "message"
   );
 
   const renderLogin = () => (
-    <div className="modal-backdrop" onClick={e => { if (e.target === e.currentTarget && !isVoiceActive) setShowLogin(false); }}>
+    <div className="modal-backdrop" onClick={e => { if (e.target === e.currentTarget) setShowLogin(false); }}>
       <div className="card animate-fade-in" style={{ width: '100%', maxWidth: '400px', padding: '3rem', position: 'relative', overflow: 'hidden' }}>
-        <button onClick={() => setShowLogin(false)} disabled={isVoiceActive} style={{ position: 'absolute', top: '15px', right: '15px', background: 'transparent', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer', fontSize: '1.2rem', opacity: isVoiceActive ? 0.5 : 1 }}>✕</button>
+        <button onClick={() => setShowLogin(false)} style={{ position: 'absolute', top: '15px', right: '15px', background: 'transparent', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer', fontSize: '1.2rem' }}>✕</button>
         <div style={{ textAlign: 'center', marginBottom: '2.5rem' }}>
-          {isVoiceActive ? (
-            <motion.div initial={{ scale: 0.8, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} className="voice-active-indicator" style={{ height: '80px', width: '80px', margin: '0 auto 1.5rem', background: 'rgba(59, 130, 246, 0.1)', borderRadius: '50%', display: 'grid', placeItems: 'center', border: '2px solid var(--accent-primary)', boxShadow: '0 0 30px rgba(59, 130, 246, 0.4)' }}>
-              <Mic size={40} className="text-accent" style={{ animation: 'pulse 1.5s infinite' }} />
-            </motion.div>
-          ) : (
-            <img src="/logo.png" alt="Logo" style={{ height: '80px', margin: '0 auto 1.5rem' }} />
-          )}
-          <h2 style={{ fontSize: '1.75rem', marginBottom: '0.5rem' }}>{isVoiceActive ? 'AI Voice Activation' : 'Terminal Access'}</h2>
-          <p style={{ color: isVoiceActive ? 'var(--accent-primary)' : 'var(--text-secondary)' }}>{isVoiceActive ? voiceTranscript : 'Rising Tech Innovation Hub'}</p>
+          <img src="/logo.png" alt="Logo" style={{ height: '80px', margin: '0 auto 1.5rem' }} />
+          <h2 style={{ fontSize: '1.75rem', marginBottom: '0.5rem' }}>Terminal Access</h2>
+          <p style={{ color: 'var(--text-secondary)' }}>Rising Tech Innovation Hub</p>
         </div>
         
-        <form onSubmit={handleLogin} style={{ display: isVoiceActive ? 'none' : 'block' }}>
+        <form onSubmit={handleLogin}>
           <div className="input-group"><label style={{ display: 'flex', alignItems: 'center', gap: '8px' }}><User size={14} /> Username</label><input type="text" className="terminal-input" placeholder="operator id" value={loginForm.username} onChange={e => setLoginForm({ ...loginForm, username: e.target.value })} required /></div>
           <div className="input-group"><label style={{ display: 'flex', alignItems: 'center', gap: '8px' }}><Lock size={14} /> Password</label><input type="password" className="terminal-input" placeholder="security key" value={loginForm.password} onChange={e => setLoginForm({ ...loginForm, password: e.target.value })} required /></div>
           <button id="login-btn" type="submit" className="btn-primary" style={{ width: '100%', justifyContent: 'center', marginTop: '1rem' }}>Authenticate</button>
         </form>
-
-        {!isVoiceActive && (
-          <div style={{ marginTop: '1.5rem', textAlign: 'center' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '10px', color: 'var(--text-muted)', fontSize: '0.8rem', marginBottom: '1rem' }}>
-              <div style={{ flex: 1, height: '1px', background: 'var(--glass-border)' }} />
-              <span>OR</span>
-              <div style={{ flex: 1, height: '1px', background: 'var(--glass-border)' }} />
-            </div>
-            <button onClick={() => { handleVoiceLogin(); (window as any).startNovaVoice?.(); }} type="button" className="btn-primary" style={{ width: '100%', justifyContent: 'center', background: 'rgba(139,92,246,0.1)', color: '#a78bfa', boxShadow: 'none', border: '1px solid rgba(139,92,246,0.3)' }}>
-              <Bot size={16} /> {isListening ? 'AI Voice Verify' : 'Activate AI Voice'}
-            </button>
-            {!isListening && <p style={{ fontSize: '0.65rem', color: 'var(--text-muted)', marginTop: '8px' }}>Mobile/Tablet: Tap to enable mic permissions</p>}
-          </div>
-        )}
 
         <AnimatePresence>
           {authError && (
@@ -2398,6 +2378,10 @@ If they do not provide the keyword, return ONLY: { "action": "reject", "message"
 
       {/* Toast */}
       <AnimatePresence>{isSent && <motion.div initial={{ opacity: 0, y: 50 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 50 }} style={{ position: 'fixed', bottom: '90px', right: '30px', background: '#10b981', color: 'white', padding: '0.8rem 1.5rem', borderRadius: '12px', display: 'flex', alignItems: 'center', gap: '10px', zIndex: 9999, fontSize: '0.9rem' }}><CheckCircle size={18} />Transmission complete!</motion.div>}</AnimatePresence>
+
+      {/* Global Lottie Animations */}
+      <LoadingOverlay show={isSending || isAiGenerating || kanbanAiGenerating || isTaskSubmitting || isLoggingIn} />
+      <NovaRobot isVisible={isAdmin} />
     </div>
   );
 };

@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { User, Shield, Trash2, UserPlus, RefreshCw, AlertCircle, CheckCircle } from 'lucide-react';
+import { User, Shield, Trash2, UserPlus, RefreshCw, AlertCircle, CheckCircle, MessageSquare } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { supabase } from '../lib/supabase';
 
@@ -15,9 +15,10 @@ interface AppUser {
 
 interface UserManagementProps {
   currentUserId: string;
+  onChat?: (userId: string) => void;
 }
 
-const UserManagement: React.FC<UserManagementProps> = ({ currentUserId }) => {
+const UserManagement: React.FC<UserManagementProps> = ({ currentUserId, onChat }) => {
   const [users, setUsers] = useState<AppUser[]>([]);
   const [loading, setLoading] = useState(true);
   const [isAdding, setIsAdding] = useState(false);
@@ -263,14 +264,24 @@ const UserManagement: React.FC<UserManagementProps> = ({ currentUserId }) => {
                       {new Date(user.created_at).toLocaleDateString()}
                     </td>
                     <td>
-                      <button 
-                        className="action-btn delete" 
-                        disabled={user.id === currentUserId}
-                        onClick={() => deleteUser(user.id, user.username)}
-                        style={{ opacity: user.id === currentUserId ? 0.2 : 0.5 }}
-                      >
-                        <Trash2 size={16} />
-                      </button>
+                      <div style={{ display: 'flex', gap: '8px', justifyContent: 'center' }}>
+                        <button 
+                          className="action-btn" 
+                          onClick={() => onChat?.(user.id)}
+                          style={{ color: 'var(--accent-primary)', opacity: 0.8 }}
+                          title="Chat with user"
+                        >
+                          <MessageSquare size={16} />
+                        </button>
+                        <button 
+                          className="action-btn delete" 
+                          disabled={user.id === currentUserId}
+                          onClick={() => deleteUser(user.id, user.username)}
+                          style={{ opacity: user.id === currentUserId ? 0.2 : 0.5 }}
+                        >
+                          <Trash2 size={16} />
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 ))}
