@@ -1734,3 +1734,122 @@ textarea.terminal-input {
     scroll-padding-left: 1rem;
   }
 }
+/* ============================================
+   KANBAN FILE SYSTEM STYLES
+   ============================================ */
+
+.task-files-section {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid rgba(255, 255, 255, 0.05);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.task-file-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-radius: 8px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-decoration: none;
+  transition: all 0.2s;
+}
+
+.task-file-link.instruction {
+  background: rgba(59, 130, 246, 0.08);
+  color: #60a5fa;
+  border: 1px solid rgba(59, 130, 246, 0.2);
+}
+
+.task-file-link.submission {
+  background: rgba(16, 185, 129, 0.08);
+  color: #34d399;
+  border: 1px solid rgba(16, 185, 129, 0.2);
+}
+
+.task-file-link:hover {
+  filter: brightness(1.2);
+  transform: translateY(-1px);
+}
+
+.file-upload-zone {
+  border: 1px dashed var(--glass-border);
+  border-radius: 10px;
+  padding: 12px;
+  transition: all 0.3s;
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.file-upload-zone:hover {
+  border-color: var(--accent-primary);
+  background: rgba(59, 130, 246, 0.05);
+}
+
+.file-upload-label {
+  display: block;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  cursor: pointer;
+  text-align: center;
+}
+
+.work-submit-btn {
+  width: 100%;
+  margin-top: 8px;
+  padding: 8px;
+  border-radius: 8px;
+  background: rgba(139, 92, 246, 0.1);
+  border: 1px solid rgba(139, 92, 246, 0.3);
+  color: #a78bfa;
+  font-size: 0.75rem;
+  font-weight: 700;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  transition: all 0.3s;
+}
+
+.work-submit-btn:hover {
+  background: var(--accent-secondary);
+  color: white;
+  border-color: var(--accent-secondary);
+  box-shadow: 0 4px 12px rgba(139, 92, 246, 0.3);
+}
+
+.verified-badge-mini {
+  padding: 2px 8px;
+  background: rgba(245, 158, 11, 0.1);
+  color: #f59e0b;
+  border: 1px solid rgba(245, 158, 11, 0.2);
+  border-radius: 4px;
+  font-size: 0.65rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.btn-secondary {
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--glass-border);
+  color: var(--text-primary);
+  padding: 0.6rem 1.2rem;
+  border-radius: 10px;
+  font-weight: 600;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.85rem;
+  transition: all 0.2s;
+}
+
+.btn-secondary:hover {
+  background: rgba(255, 255, 255, 0.1);
+  transform: translateY(-1px);
+}

@@ -7,22 +7,49 @@ interface LottieWrapperProps {
   style?: React.CSSProperties;
 }
 
+const lottieCache: Record<string, any> = {};
+
 const LottieWrapper: React.FC<LottieWrapperProps> = ({ path, className, style }) => {
-  const [animationData, setAnimationData] = useState<any>(null);
+  const [animationData, setAnimationData] = useState<any>(lottieCache[path] || null);
 
   useEffect(() => {
+    if (lottieCache[path]) {
+      setAnimationData(lottieCache[path]);
+      return;
+    }
+
     fetch(path)
       .then((res) => res.json())
-      .then((data) => setAnimationData(data))
+      .then((data) => {
+        lottieCache[path] = data;
+        setAnimationData(data);
+      })
       .catch((err) => console.error(`Error loading Lottie from ${path}:`, err));
   }, [path]);
 
   if (!animationData) return null;
 
-  // Handle potential default export differences in some environments
   const LottieComponent = (Lottie as any).default || Lottie;
 
-  return <LottieComponent animationData={animationData} loop={true} className={className} style={style} />;
+  return (
+    <LottieComponent 
+      animationData={animationData} 
+      loop={true} 
+      className={className} 
+      style={{
+        ...style,
+        transform: 'scale(1.6)', // Zoom in to remove whitespace margins
+        transformOrigin: 'center center'
+      }}
+      renderer="canvas"
+      rendererSettings={{
+        preserveAspectRatio: 'xMidYMid meet',
+        clearCanvas: true,
+        progressiveLoad: true,
+        hideOnTransparent: true
+      }}
+    />
+  );
 };
 
 export const LoadingOverlay: React.FC<{ show: boolean }> = ({ show }) => {
@@ -47,7 +74,7 @@ export const LoadingOverlay: React.FC<{ show: boolean }> = ({ show }) => {
       }}
       className="loading-overlay-container"
     >
-      <div style={{ width: 300, height: 300 }}>
+      <div style={{ width: 600, height: 600 }}>
         <LottieWrapper path="/cat%20Mark%20loading.json" />
       </div>
       <p style={{ 
@@ -65,48 +92,73 @@ export const LoadingOverlay: React.FC<{ show: boolean }> = ({ show }) => {
   );
 };
 
+import { motion } from 'framer-motion';
+
 export const NovaRobot: React.FC<{ isVisible: boolean }> = ({ isVisible }) => {
   if (!isVisible) return null;
 
   return (
-    <div 
+    <motion.div 
+      initial={{ opacity: 0, scale: 0.5 }}
+      animate={{ 
+        opacity: 1, 
+        scale: 1,
+        // Smooth wandering path
+        x: [0, -40, 30, -20, 0],
+        y: [0, -100, -50, -150, 0],
+        rotate: [0, 5, -5, 2, 0]
+      }}
+      transition={{
+        opacity: { duration: 0.5 },
+        scale: { duration: 0.5 },
+        // Wander animation config
+        x: { duration: 15, repeat: Infinity, ease: "easeInOut" },
+        y: { duration: 18, repeat: Infinity, ease: "easeInOut" },
+        rotate: { duration: 10, repeat: Infinity, ease: "easeInOut" }
+      }}
       style={{
         position: 'fixed',
-        bottom: '80px',
-        right: '20px',
-        width: '200px',
-        height: '200px',
+        bottom: '60px',
+        right: '40px',
+        width: '300px',
+        height: '300px',
         zIndex: 5000,
         pointerEvents: 'none',
-        filter: 'drop-shadow(0 0 20px rgba(0, 242, 255, 0.4))',
-        animation: 'novaFloat 4s ease-in-out infinite'
+        filter: 'drop-shadow(0 0 35px rgba(0, 242, 255, 0.4))',
       }}
       className="nova-robot-hover"
     >
-      <style>{`
-        @keyframes novaFloat {
-          0% { transform: translateY(0px); }
-          50% { transform: translateY(-15px); }
-          100% { transform: translateY(0px); }
-        }
-      `}</style>
       <LottieWrapper path="/Anima%20Bot.json" />
-      <div style={{
-        position: 'absolute',
-        top: '-40px',
-        right: '0',
-        background: 'rgba(0, 242, 255, 0.1)',
-        border: '1px solid rgba(0, 242, 255, 0.3)',
-        padding: '8px 12px',
-        borderRadius: '12px',
-        color: '#00f2ff',
-        fontSize: '0.75rem',
-        backdropFilter: 'blur(4px)',
-        whiteSpace: 'nowrap',
-        pointerEvents: 'auto'
-      }}>
-        Admin Assistant Active
-      </div>
-    </div>
+      <motion.div 
+        animate={{
+          y: [0, -5, 0]
+        }}
+        transition={{
+          duration: 3,
+          repeat: Infinity,
+          ease: "easeInOut"
+        }}
+        style={{
+          position: 'absolute',
+          top: '-30px',
+          right: '-10px',
+          background: 'rgba(0, 24, 40, 0.6)',
+          border: '1px solid rgba(0, 242, 255, 0.4)',
+          padding: '6px 14px',
+          borderRadius: '20px',
+          color: '#00f2ff',
+          fontSize: '0.7rem',
+          fontWeight: 700,
+          textTransform: 'uppercase',
+          letterSpacing: '0.5px',
+          backdropFilter: 'blur(8px)',
+          whiteSpace: 'nowrap',
+          pointerEvents: 'auto',
+          boxShadow: '0 4px 15px rgba(0,0,0,0.3)'
+        }}
+      >
+        Nova AI Active
+      </motion.div>
+    </motion.div>
   );
 };

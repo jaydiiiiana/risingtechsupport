@@ -5,7 +5,7 @@ import {
   AppWindow, Zap, AlertCircle, User, Lock, LogOut,
   Sparkles, Bot, Loader2, PenLine, MapPin, Phone,
   Columns2, Plus, MoreVertical, Trash2, Calendar, ShieldCheck,
-  Mic, MicOff, Video, VideoOff, MessageSquare
+  Mic, MessageSquare, Paperclip, Download, UploadCloud
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { type TroubleshootingReport } from './data/reports';
@@ -35,6 +35,9 @@ interface KanbanTask {
   createdBy: string | null;
   dueAt: string | null;
   createdAt: string;
+  updatedAt?: string;
+  attachmentUrl?: string | null;
+  submissionUrl?: string | null;
 }
 
 interface AppUser {
@@ -48,7 +51,6 @@ interface AppUser {
 const DOCK_APPS = [
   { type: 'dashboard', label: 'Dashboard', icon: LayoutDashboard, cssClass: 'dashboard' },
   { type: 'kanban', label: 'Kanban Board', icon: Columns2, cssClass: 'kanban' },
-  { type: 'meetings', label: 'Nova Meeting', icon: Video, cssClass: 'meetings' },
   { type: 'messenger', label: 'Nova Messenger', icon: MessageSquare, cssClass: 'messenger' },
   { type: 'sender', label: 'Email Sender', icon: Mail, cssClass: 'email' },
   { type: 'reports', label: 'Reports History', icon: FileText, cssClass: 'email' },
@@ -59,7 +61,6 @@ const DOCK_APPS = [
 const WINDOW_DEFAULTS: Record<string, { x: number; y: number; w: number; h: number }> = {
   dashboard: { x: 80, y: 32, w: 900, h: 580 },
   kanban: { x: 110, y: 32, w: 940, h: 620 },
-  meetings: { x: 125, y: 32, w: 1000, h: 680 },
   messenger: { x: 250, y: 100, w: 400, h: 600 },
   sender: { x: 140, y: 32, w: 860, h: 580 },
   reports: { x: 170, y: 32, w: 880, h: 560 },
@@ -165,7 +166,9 @@ const App: React.FC = () => {
   const [aiError, setAiError] = useState<string | null>(null);
   const [currentTime, setCurrentTime] = useState(new Date());
   const [isTaskSubmitting, setIsTaskSubmitting] = useState(false);
+  const [uploadingTaskId, setUploadingTaskId] = useState<string | null>(null);
   const [allUsers, setAllUsers] = useState<AppUser[]>([]);
+  const [isSystemBooting, setIsSystemBooting] = useState(true);
 
   // Appearance State
   const [theme, setTheme] = useState<'light' | 'dark'>(() => (localStorage.getItem('rt_theme') as any) || 'dark');
@@ -196,7 +199,24 @@ const App: React.FC = () => {
     ];
   });
   const [isTaskModalOpen, setIsTaskModalOpen] = useState(false);
-  const [newTask, setNewTask] = useState({ title: '', description: '', priority: 'medium' as const, status: 'todo' as const, dueAt: '', assignedTo: '' });
+  const [selectedKanbanTask, setSelectedKanbanTask] = useState<KanbanTask | null>(null);
+  const [newTask, setNewTask] = useState<{
+    title: string;
+    description: string;
+    priority: 'low' | 'medium' | 'high';
+    status: 'todo' | 'in-progress' | 'review' | 'done';
+    dueAt: string;
+    assignedTo: string;
+    attachmentFile: File | null;
+  }>({ 
+    title: '', 
+    description: '', 
+    priority: 'medium', 
+    status: 'todo', 
+    dueAt: '', 
+    assignedTo: '', 
+    attachmentFile: null 
+  });
   const [kanbanAiGenerating, setKanbanAiGenerating] = useState(false);
   const [kanbanView, setKanbanView] = useState<'board' | 'archive'>('board');
   const [toolsHeight, setToolsHeight] = useState(240);
@@ -206,6 +226,51 @@ const App: React.FC = () => {
   const [messengerInput, setMessengerInput] = useState('');
   const [unreadCounts, setUnreadCounts] = useState<Record<string, number>>({});
   const [isListening, setIsListening] = useState(false);
+
+  // --- STORAGE HELPERS ---
+  const handleFileUpload = async (file: File, folder: string, taskId?: string) => {
+    if (taskId) setUploadingTaskId(taskId);
+    try {
+      const fileExt = file.name.split('.').pop();
+      const fileName = `${Date.now()}-${Math.random().toString(36).substring(2)}.${fileExt}`;
+      const filePath = `${folder}/${fileName}`;
+
+      const { error: uploadError } = await supabase.storage
+        .from('task-attachments')
+        .upload(filePath, file);
+
+      if (uploadError) throw uploadError;
+
+      const { data: { publicUrl } } = supabase.storage
+        .from('task-attachments')
+        .getPublicUrl(filePath);
+
+      return publicUrl;
+    } catch (err: any) {
+      console.error('File Upload Error:', err);
+      const isBucketError = err.message?.toLowerCase().includes('bucket not found') || err.error?.toLowerCase().includes('bucket not found');
+      if (isBucketError) {
+        alert('SUPABASE CONFIG ERROR: The "task-attachments" storage bucket was not found. Please create it in your Supabase Dashboard and set it to "Public".');
+      } else {
+        alert(`Upload failed: ${err.message || 'Check storage bucket permissions.'}`);
+      }
+      return null;
+    } finally {
+      if (taskId) setUploadingTaskId(null);
+    }
+  };
+
+  const deleteFileFromStorage = async (url: string) => {
+    try {
+      if (!url || !url.includes('/task-attachments/')) return;
+      const path = url.split('/task-attachments/')[1];
+      if (path) {
+        await supabase.storage.from('task-attachments').remove([path]);
+      }
+    } catch (err) {
+      console.error('File Delete Error:', err);
+    }
+  };
   const selectedChatRef = useRef<string | null>(null);
   const openWindowsRef = useRef<OpenWindow[]>([]);
   const notifiedIdsRef = useRef(new Set<string>());
@@ -218,6 +283,16 @@ const App: React.FC = () => {
   useEffect(() => {
     openWindowsRef.current = openWindows;
   }, [openWindows]);
+
+  useEffect(() => {
+    const messengerWin = openWindows.find(w => w.type === 'messenger');
+    if (messengerWin && !messengerWin.minimized && focusedWindow === messengerWin.id) {
+       const key = selectedChatUserId || 'global';
+       if (unreadCounts[key] > 0) {
+         setUnreadCounts(prev => ({ ...prev, [key]: 0 }));
+       }
+    }
+  }, [openWindows, focusedWindow, selectedChatUserId, unreadCounts]);
 
   useEffect(() => {
     const t = setInterval(() => setCurrentTime(new Date()), 1000);
@@ -258,20 +333,21 @@ const App: React.FC = () => {
         const unsyncedOptimistic = optimistic.filter(om => !serverMsgs.some(sm => sm.text === om.text && sm.senderId === om.senderId));
         
         // Notifications for polled messages (fallback if real-time fails)
-        const isMessengerOpen = openWindowsRef.current.some(w => w.type === 'messenger' && !w.minimized);
-        const currentTopic = selectedChatRef.current;
 
         serverMsgs.forEach(m => {
           if (m.senderId !== currentUser?.id && !prev.some(p => p.id === m.id) && !notifiedIdsRef.current.has(m.id)) {
-            // This is a NEW message we haven't notified for yet
             notifiedIdsRef.current.add(m.id);
 
-            const isCurrentThread = m.receiverId === null 
-              ? (isMessengerOpen && currentTopic === null)
-              : (isMessengerOpen && currentTopic === m.senderId);
+            const messengerWin = openWindowsRef.current.find(w => w.type === 'messenger' && !w.minimized);
+            const isMessengerFocused = messengerWin && focusedWindow === messengerWin.id;
+            const currentTopic = selectedChatRef.current;
 
-            playBellSound();
+            const isCurrentThread = isMessengerFocused && (m.receiverId === null 
+              ? (currentTopic === null)
+              : (currentTopic === m.senderId));
+
             if (!isCurrentThread) {
+              playBellSound();
               const key = m.receiverId === null ? 'global' : m.senderId;
               setUnreadCounts(u => ({ ...u, [key]: (u[key] || 0) + 1 }));
             }
@@ -307,16 +383,17 @@ const App: React.FC = () => {
               if (!notifiedIdsRef.current.has(m.id)) {
                 notifiedIdsRef.current.add(m.id);
 
-                // Notification Logic (Fresh state check)
-                const isMessengerOpen = openWindowsRef.current.some(w => w.type === 'messenger' && !w.minimized);
+                // Notification Logic (Strict focus check)
+                const messengerWin = openWindowsRef.current.find(w => w.type === 'messenger' && !w.minimized);
+                const isMessengerFocused = messengerWin && focusedWindow === messengerWin.id;
                 const currentTopic = selectedChatRef.current;
-                const isCurrentThread = m.receiver_id === null 
-                  ? (isMessengerOpen && currentTopic === null)
-                  : (isMessengerOpen && currentTopic === m.sender_id);
 
-                // Fresh message - Trigger notification
-                playBellSound();
+                const isCurrentThread = isMessengerFocused && (m.receiver_id === null 
+                  ? (currentTopic === null)
+                  : (currentTopic === m.sender_id));
+
                 if (!isCurrentThread) {
+                  playBellSound();
                   const key = m.receiver_id === null ? 'global' : m.sender_id;
                   setUnreadCounts(u => ({ ...u, [key]: (u[key] || 0) + 1 }));
                 }
@@ -437,10 +514,11 @@ const App: React.FC = () => {
         }
 
         if (autoTranscript.includes('close nova') || autoTranscript.includes('nova close') || autoTranscript.includes('lock terminal')) {
-           playWelcomeVoice("Nova signing off. Goodbye.");
-           setCurrentUser(null);
-           setOpenWindows([]);
-           return;
+          playWelcomeVoice("Nova signing off. Goodbye.");
+          setCurrentUser(null);
+          setOpenWindows([]);
+          localStorage.removeItem('rising_tech_user');
+          return;
         }
 
         const triggerApp = (type: string, msg: string) => {
@@ -463,7 +541,7 @@ const App: React.FC = () => {
         if (autoTranscript.includes('open email') || autoTranscript.includes('open sender')) { triggerApp('sender', 'Launching Email transmission unit.'); return; }
         if (autoTranscript.includes('open report')) { triggerApp('reports', 'Opening internal report history.'); return; }
         if (autoTranscript.includes('open setting')) { triggerApp('settings', 'Accessing system configuration.'); return; }
-        if (autoTranscript.includes('open meeting')) { triggerApp('meetings', 'Joining the Nova meeting space.'); return; }
+        if (autoTranscript.includes('open meeting')) { playWelcomeVoice("Meeting module has been decommissioned."); return; }
         
         const closeAppVoice = (type: string, msg: string) => {
            setOpenWindows(ws => {
@@ -475,7 +553,7 @@ const App: React.FC = () => {
 
         if (autoTranscript.includes('close user management')) { closeAppVoice('users', 'Closing User Management.'); return; }
         if (autoTranscript.includes('close kanban')) { closeAppVoice('kanban', 'Closing Kanban.'); return; }
-        if (autoTranscript.includes('close meeting')) { closeAppVoice('meetings', 'Leaving meeting space.'); return; }
+        if (autoTranscript.includes('close meeting')) { return; }
         if (autoTranscript.includes('clear screen')) { setOpenWindows([]); return; }
         
         if (autoTranscript.includes('reboot nova')) {
@@ -590,6 +668,9 @@ const App: React.FC = () => {
 
   // --- DOCK ACTIONS ---
   const openApp = (type: string) => {
+    // Restricted access for Private users
+    if (type === 'dashboard' && currentUser?.category?.toLowerCase() === 'private') return;
+
     const existing = openWindows.find(w => w.type === type);
     if (existing) {
       if (existing.minimized) {
@@ -673,7 +754,9 @@ const App: React.FC = () => {
           createdBy: t.created_by,
           dueAt: t.due_at,
           createdAt: t.created_at,
-          updatedAt: t.updated_at
+          updatedAt: t.updated_at,
+          attachmentUrl: t.attachment_url,
+          submissionUrl: t.submission_url
         }));
 
         // Auto-archive check
@@ -696,14 +779,19 @@ const App: React.FC = () => {
       const { data: users, error: usersError } = await supabase.from('app_users').select('id, username, full_name, role, category');
       if (usersError) console.error('Users Fetch Error:', usersError);
       if (users) setAllUsers(users);
-
     } catch (err) {
       console.error('Master Sync Error:', err);
+    } finally {
+      setIsSystemBooting(false);
     }
   }, [selectedReportId, currentUser]);
 
   useEffect(() => {
-    if (isLoggedIn) fetchSupabaseData();
+    if (isLoggedIn) {
+      fetchSupabaseData();
+    } else {
+      setIsSystemBooting(false);
+    }
   }, [isLoggedIn, fetchSupabaseData]);
 
   // Real-time updates for client complaints
@@ -739,11 +827,35 @@ const App: React.FC = () => {
           const t = payload.new;
           setKanbanTasks(prev => {
             if (prev.some(task => task.id === t.id)) return prev;
-            return [...prev, { id: t.id, title: t.title, description: t.description, status: t.status, priority: t.priority, assignedTo: t.assigned_to, createdBy: t.created_by, dueAt: t.due_at, createdAt: t.created_at }];
+            return [...prev, { 
+              id: t.id, 
+              title: t.title, 
+              description: t.description, 
+              status: t.status, 
+              priority: t.priority, 
+              assignedTo: t.assigned_to, 
+              createdBy: t.created_by, 
+              dueAt: t.due_at, 
+              createdAt: t.created_at,
+              attachmentUrl: t.attachment_url,
+              submissionUrl: t.submission_url
+            }];
           });
         } else if (payload.eventType === 'UPDATE') {
           const t = payload.new;
-          setKanbanTasks(prev => prev.map(old => old.id === t.id ? { id: t.id, title: t.title, description: t.description, status: t.status, priority: t.priority, assignedTo: t.assigned_to, createdBy: t.created_by, dueAt: t.due_at, createdAt: t.created_at } : old));
+          setKanbanTasks(prev => prev.map(old => old.id === t.id ? { 
+            id: t.id, 
+            title: t.title, 
+            description: t.description, 
+            status: t.status, 
+            priority: t.priority, 
+            assignedTo: t.assigned_to, 
+            createdBy: t.created_by, 
+            dueAt: t.due_at, 
+            createdAt: t.created_at,
+            attachmentUrl: t.attachment_url,
+            submissionUrl: t.submission_url
+          } : old));
         } else if (payload.eventType === 'DELETE') {
           setKanbanTasks(prev => prev.filter(old => old.id !== payload.old.id));
         }
@@ -1132,10 +1244,35 @@ const App: React.FC = () => {
   };
 
 
+  const handleWorkSubmission = async (taskId: string, file: File) => {
+    const url = await handleFileUpload(file, 'submissions', taskId);
+    if (!url) return;
+    
+    try {
+      const { error } = await supabase.from('kanban_tasks').update({
+        submission_url: url,
+        status: 'review',
+        updated_at: new Date().toISOString()
+      }).eq('id', taskId);
+
+      if (error) throw error;
+      setKanbanTasks(prev => prev.map(t => t.id === taskId ? { ...t, submissionUrl: url, status: 'review' } : t));
+    } catch (err) {
+      console.error('Work Submission Error:', err);
+      alert('Failed to update submission data.');
+    }
+  };
+
+
   const addTask = async () => {
     if (!newTask.title.trim() || isTaskSubmitting) return;
     setIsTaskSubmitting(true);
     try {
+      let attachmentUrl = null;
+      if (newTask.attachmentFile) {
+        attachmentUrl = await handleFileUpload(newTask.attachmentFile, 'attachments');
+      }
+
       const { data, error } = await supabase.from('kanban_tasks').insert([{
         title: newTask.title,
         description: newTask.description,
@@ -1143,7 +1280,8 @@ const App: React.FC = () => {
         priority: newTask.priority,
         assigned_to: newTask.assignedTo || currentUser?.id,
         created_by: currentUser?.id,
-        due_at: newTask.dueAt || null
+        due_at: newTask.dueAt || null,
+        attachment_url: attachmentUrl
       }]).select();
 
       if (error) throw error;
@@ -1160,7 +1298,9 @@ const App: React.FC = () => {
           assignedTo: t.assigned_to,
           createdBy: t.created_by,
           dueAt: t.due_at,
-          createdAt: t.created_at
+          createdAt: t.created_at,
+          attachmentUrl: t.attachment_url,
+          submissionUrl: t.submission_url
         };
 
         // Only update if not already handled by real-time to avoid duplicates
@@ -1171,7 +1311,7 @@ const App: React.FC = () => {
       }
 
       setIsTaskModalOpen(false);
-      setNewTask({ title: '', description: '', priority: 'medium', status: 'todo', dueAt: '', assignedTo: '' });
+      setNewTask({ title: '', description: '', priority: 'medium', status: 'todo', dueAt: '', assignedTo: '', attachmentFile: null });
     } catch (err) {
       console.error('Add Task Error:', err);
       alert('Failed to add task. Please ensure you have run the SQL schema in your Supabase dashboard.');
@@ -1184,19 +1324,55 @@ const App: React.FC = () => {
     const task = kanbanTasks.find(t => t.id === id);
     if (!task) return;
 
-    // Permissions check:
+    // Permissions & Logistics Check:
     const isAssignedToMe = task.assignedTo === currentUser?.id;
     const isCreatedByMe = task.createdBy === currentUser?.id;
     const taskCreator = allUsers.find(u => u.id === task.createdBy);
     const isTaskFromAdmin = taskCreator?.role === 'admin';
 
+    // 1. Mandatory File Submission Check
+    // If moving to review and it's not a personal task, staff MUST have uploaded a submission
+    if (newStatus === 'review' && !isCreatedByMe && isAssignedToMe && !task.submissionUrl) {
+      alert("CRITICAL: You must upload your Work File before requesting a Review.");
+      return;
+    }
+
+    // 2. Lock Done Tasks
+    if (task.status === 'done' && !isAdmin) {
+      alert("This task has been verified and locked. Only an Admin can revert 'Done' tasks.");
+      return;
+    }
+
+    // 3. Handle Rejection (Review -> Working)
+    if (task.status === 'review' && newStatus === 'in-progress') {
+       if (task.submissionUrl) {
+         await deleteFileFromStorage(task.submissionUrl);
+       }
+       try {
+         const { error } = await supabase.from('kanban_tasks').update({
+           status: 'in-progress',
+           submission_url: null,
+           updated_at: new Date().toISOString()
+         }).eq('id', id);
+         if (error) throw error;
+         setKanbanTasks(prev => prev.map(t => t.id === id ? { ...t, status: 'in-progress', submissionUrl: null } : t));
+         return;
+       } catch (e) {
+         console.error("Rejection Error:", e);
+         return;
+       }
+    }
+
+    let assignmentUpdate: any = {};
     if (!isAdmin) {
-      if (!isAssignedToMe && !isCreatedByMe) {
+      if (!task.assignedTo && task.status === 'todo' && newStatus === 'in-progress') {
+        // AUTO CLAIM: Assign task to the user who moved it
+        assignmentUpdate = { assigned_to: currentUser?.id };
+      } else if (!isAssignedToMe && !isCreatedByMe) {
         alert("You do not have permission to manage this task.");
         return;
       }
 
-      // If it's a task assigned BY an admin TO a user:
       if (isTaskFromAdmin && !isCreatedByMe) {
         if (newStatus === 'done' || newStatus === 'archived') {
           alert("Only Admin can complete or archive this task. Please move it to 'Review' instead.");
@@ -1207,10 +1383,11 @@ const App: React.FC = () => {
 
     try {
       // Optimistic Update
-      setKanbanTasks(prev => prev.map(t => t.id === id ? { ...t, status: newStatus } : t));
+      setKanbanTasks(prev => prev.map(t => t.id === id ? { ...t, status: newStatus, assignedTo: assignmentUpdate.assigned_to || t.assignedTo } : t));
 
       const { error } = await supabase.from('kanban_tasks').update({
         status: newStatus,
+        ...assignmentUpdate,
         updated_at: new Date().toISOString()
       }).eq('id', id);
       if (error) throw error;
@@ -1251,6 +1428,137 @@ const App: React.FC = () => {
       if (error) throw error;
     } catch (err) { console.error('Delete Task Error:', err); }
   };
+
+  const renderTaskDetailModal = () => (
+    <AnimatePresence>
+      {selectedKanbanTask && (
+        <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="modal-backdrop" style={{ zIndex: 8000 }}>
+          <motion.div initial={{ scale: 0.9, y: 20 }} animate={{ scale: 1, y: 0 }} className="modal-content card task-detail-view" style={{ maxWidth: '600px' }}>
+             <div className="detail-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
+               <div className={`status-pill ${selectedKanbanTask.status}`} style={{ textTransform: 'capitalize' }}>{selectedKanbanTask.status.replace('-', ' ')}</div>
+               <div style={{ cursor: 'pointer', padding: '5px' }} onClick={() => setSelectedKanbanTask(null)}><Plus size={24} style={{ transform: 'rotate(45deg)', color: 'var(--text-muted)' }} /></div>
+             </div>
+             
+             <h2 style={{ fontSize: '1.5rem', marginBottom: '0.5rem' }}>{selectedKanbanTask.title}</h2>
+             <div style={{ display: 'flex', gap: '15px', color: 'var(--text-secondary)', fontSize: '0.85rem', marginBottom: '2rem' }}>
+               <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}><Calendar size={14} /> Created {new Date(selectedKanbanTask.createdAt).toLocaleDateString()}</div>
+               {selectedKanbanTask.dueAt && (
+                 <div style={{ display: 'flex', alignItems: 'center', gap: '6px', color: new Date(selectedKanbanTask.dueAt) < new Date() ? '#f87171' : 'inherit' }}>
+                   <Clock size={14} /> Due {new Date(selectedKanbanTask.dueAt).toLocaleString()}
+                 </div>
+               )}
+             </div>
+
+             <div style={{ marginBottom: '2rem' }}>
+               <label style={{ display: 'block', fontSize: '0.75rem', fontWeight: 700, textTransform: 'uppercase', color: 'var(--accent-primary)', marginBottom: '0.75rem' }}>Description</label>
+               <div style={{ background: 'rgba(255,255,255,0.03)', padding: '1.25rem', borderRadius: '12px', border: '1px solid var(--glass-border)', lineHeight: 1.6 }}>{selectedKanbanTask.description || "No description provided."}</div>
+             </div>
+
+             <div style={{ marginBottom: '2rem' }}>
+               <label style={{ display: 'block', fontSize: '0.75rem', fontWeight: 700, textTransform: 'uppercase', color: 'var(--accent-primary)', marginBottom: '0.75rem' }}>Task Assets</label>
+               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '15px' }}>
+                 <div 
+                   className="asset-card instruction" 
+                   onClick={() => selectedKanbanTask.attachmentUrl && window.open(selectedKanbanTask.attachmentUrl, '_blank')}
+                   style={{ 
+                     background: 'rgba(59, 130, 246, 0.05)', 
+                     border: '1px solid rgba(59, 130, 246, 0.1)', 
+                     padding: '1rem', 
+                     borderRadius: '12px', 
+                     display: 'flex', 
+                     gap: '12px',
+                     cursor: selectedKanbanTask.attachmentUrl ? 'pointer' : 'default',
+                     transition: 'all 0.2s'
+                   }}
+                 >
+                   <div style={{ width: '40px', height: '40px', background: 'rgba(59, 130, 246, 0.1)', borderRadius: '10px', display: 'grid', placeItems: 'center', color: '#60a5fa' }}><Paperclip size={20} /></div>
+                   <div style={{ flex: 1 }}>
+                     <h4 style={{ margin: '0 0 4px 0', fontSize: '0.9rem' }}>Instructional Payload</h4>
+                     {selectedKanbanTask.attachmentUrl ? (
+                       <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                         {(selectedKanbanTask.attachmentUrl.match(/\.(jpeg|jpg|gif|png)$/i)) ? (
+                           <div style={{ borderRadius: '8px', overflow: 'hidden', border: '1px solid rgba(255,255,255,0.1)', marginTop: '5px' }}>
+                             <img src={selectedKanbanTask.attachmentUrl} alt="Instruction Preview" style={{ width: '100%', height: 'auto', display: 'block' }} />
+                           </div>
+                         ) : null}
+                         <span style={{ color: '#60a5fa', fontSize: '0.8rem', display: 'flex', alignItems: 'center', gap: '4px', fontWeight: 600 }}>
+                           <Download size={14} /> Get File
+                         </span>
+                       </div>
+                     ) : <span style={{ color: 'var(--text-muted)', fontSize: '0.75rem' }}>No attachment</span>}
+                   </div>
+                 </div>
+
+                 <div 
+                   className="asset-card submission" 
+                   onClick={() => {
+                     if (selectedKanbanTask.submissionUrl) {
+                       window.open(selectedKanbanTask.submissionUrl, '_blank');
+                     } else if (selectedKanbanTask.assignedTo === currentUser?.id) {
+                       document.getElementById('modal-submit-file')?.click();
+                     }
+                   }}
+                   style={{ 
+                     background: 'rgba(16, 185, 129, 0.05)', 
+                     border: '1px solid rgba(16, 185, 129, 0.1)', 
+                     padding: '1rem', 
+                     borderRadius: '12px', 
+                     display: 'flex', 
+                     gap: '12px',
+                     cursor: (selectedKanbanTask.submissionUrl || (selectedKanbanTask.assignedTo === currentUser?.id && selectedKanbanTask.status === 'in-progress')) ? 'pointer' : 'default'
+                   }}
+                 >
+                   <div style={{ width: '40px', height: '40px', background: 'rgba(16, 185, 129, 0.1)', borderRadius: '10px', display: 'grid', placeItems: 'center', color: '#10b981' }}><UploadCloud size={20} /></div>
+                   <div style={{ flex: 1 }}>
+                     <h4 style={{ margin: '0 0 4px 0', fontSize: '0.9rem' }}>Work Submission</h4>
+                     <div style={{ display: 'none' }}>
+                        <input type="file" id="modal-submit-file" onChange={e => {
+                          const file = e.target.files?.[0];
+                          if (file) handleWorkSubmission(selectedKanbanTask.id, file);
+                        }} />
+                     </div>
+                     {selectedKanbanTask.submissionUrl ? (
+                       <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                         {selectedKanbanTask.submissionUrl.match(/\.(jpeg|jpg|gif|png)$/i) ? (
+                           <div style={{ borderRadius: '8px', overflow: 'hidden', border: '1px solid rgba(255,255,255,0.1)', marginTop: '5px' }}>
+                             <img src={selectedKanbanTask.submissionUrl} alt="Submission Preview" style={{ width: '100%', height: 'auto', display: 'block' }} />
+                           </div>
+                         ) : null}
+                         <span style={{ color: '#10b981', fontSize: '0.8rem', display: 'flex', alignItems: 'center', gap: '4px', fontWeight: 600 }}>
+                           <Download size={14} /> Get File
+                         </span>
+                         {selectedKanbanTask.status === 'in-progress' && selectedKanbanTask.assignedTo === currentUser?.id && (
+                           <div onClick={(e) => { e.stopPropagation(); document.getElementById('modal-submit-file')?.click(); }} style={{ fontSize: '0.75rem', color: '#60a5fa', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px', opacity: 0.8 }}>
+                             <Plus size={12} /> Replace File
+                           </div>
+                         )}
+                       </div>
+                     ) : (
+                       <div style={{ display: 'flex', flexDirection: 'column', gap: '5px' }}>
+                         <span className="no-asset">Pending upload...</span>
+                         {selectedKanbanTask.status === 'in-progress' && selectedKanbanTask.assignedTo === currentUser?.id && (
+                           <span style={{ fontSize: '0.75rem', color: '#10b981', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '4px' }}>
+                             <Plus size={12} /> Upload File
+                           </span>
+                         )}
+                       </div>
+                     )}
+                   </div>
+                 </div>
+               </div>
+             </div>
+
+             <div className="detail-footer" style={{ borderTop: '1px solid var(--glass-border)', paddingTop: '1.5rem', marginTop: '1rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+               <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
+                 <User size={16} /> Assigned to: <strong style={{ color: 'var(--text-primary)' }}>{allUsers.find(u => u.id === selectedKanbanTask.assignedTo)?.full_name || 'Myself'}</strong>
+               </div>
+               <button className="btn-primary" onClick={() => setSelectedKanbanTask(null)}>Close View</button>
+             </div>
+          </motion.div>
+        </motion.div>
+      )}
+    </AnimatePresence>
+  );
 
   const renderArchive = (tasksInArchive?: KanbanTask[]) => {
     const archivedTasks = (tasksInArchive || kanbanTasks).filter(t => t.status === 'archived');
@@ -1324,7 +1632,7 @@ const App: React.FC = () => {
     ];
 
     // Visibility Calculation:
-    const visibleTasks = kanbanTasks.filter(task => {
+    const visibleTasks = kanbanTasks.filter((task: KanbanTask) => {
       const isPersonal = task.createdBy === task.assignedTo;
       if (isPersonal) {
         // Personal tasks are strictly for the owner (even Admins can't see others' personal tasks)
@@ -1368,20 +1676,20 @@ const App: React.FC = () => {
                 <div className="col-title">
                   <col.icon size={16} style={{ color: col.color }} />
                   <span>{col.label}</span>
-                  <span className="count">{visibleTasks.filter(t => t.status === col.id).length}</span>
+                  <span className="count">{visibleTasks.filter((t: any) => t.status === col.id).length}</span>
                 </div>
                 <MoreVertical size={14} className="text-muted" />
               </div>
 
               <div className="kanban-task-list">
-                {visibleTasks.filter(t => t.status === col.id).map(task => (
+                {visibleTasks.filter((t: any) => t.status === col.id).map((task: any) => (
                   <div
                     key={task.id}
                     className="kanban-card-wrapper"
                   >
                     <motion.div
                       layout
-                      drag
+                      drag={task.status !== 'done' || isAdmin}
                       dragConstraints={{ left: 0, right: 0, top: 0, bottom: 0 }}
                       dragElastic={0.05}
                       dragTransition={{ bounceStiffness: 600, bounceDamping: 20 }}
@@ -1390,7 +1698,7 @@ const App: React.FC = () => {
                         const columnsElements = document.querySelectorAll('.kanban-column');
                         let droppedOnId: any = null;
 
-                        columnsElements.forEach(colEl => {
+                        columnsElements.forEach((colEl: any) => {
                           const rect = colEl.getBoundingClientRect();
                           if (x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom) {
                             droppedOnId = colEl.getAttribute('data-col-id');
@@ -1401,10 +1709,22 @@ const App: React.FC = () => {
                           moveTask(task.id, droppedOnId);
                         }
                       }}
+                      onPointerDown={e => e.stopPropagation()}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        // Direct action based on column logic:
+                        if (task.status === 'todo' && task.attachmentUrl) {
+                          // In Todo, primary action is getting the file
+                          window.open(task.attachmentUrl, '_blank');
+                        } else {
+                          // Otherwise, open detail modal for full info/submission
+                          setSelectedKanbanTask(task);
+                        }
+                      }}
                       initial={{ opacity: 0, scale: 0.95 }}
                       animate={{ opacity: 1, scale: 1 }}
-                      whileHover={{ scale: 1.02 }}
-                      whileTap={{ scale: 0.92, zIndex: 1000 }}
+                      whileHover={{ scale: 1.02, cursor: (task.status !== 'done' || isAdmin) ? 'grab' : 'pointer' }}
+                      whileTap={{ scale: 0.95, zIndex: 1000, cursor: 'grabbing' }}
                       className={`kanban-card${task.status === 'done' ? ' task-completed' : ''}`}
                     >
                       <div className="card-top">
@@ -1424,6 +1744,45 @@ const App: React.FC = () => {
                       </div>
                       <h4 className="task-title" style={task.status === 'done' ? { textDecoration: 'line-through', opacity: 0.6 } : {}}>{task.title}</h4>
                       <p className="task-desc" style={task.status === 'done' ? { opacity: 0.5 } : {}}>{task.description}</p>
+
+                      {/* File Management UI */}
+                      <div className="task-files-section">
+                        {task.attachmentUrl && (
+                          <a href={task.attachmentUrl} target="_blank" rel="noopener noreferrer" className="task-file-link instruction" onClick={(e) => e.stopPropagation()}>
+                            <Paperclip size={12} /> Instructions File
+                          </a>
+                        )}
+
+                        {task.submissionUrl ? (
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '4px' }}>
+                            <a href={task.submissionUrl} target="_blank" rel="noopener noreferrer" className="task-file-link submission" onClick={(e) => e.stopPropagation()}>
+                              <Download size={12} /> Work Submission
+                            </a>
+                            {isAdmin && task.status === 'review' && (
+                              <div className="verified-badge-mini" title="Awaiting Verification">Reviewing</div>
+                            )}
+                          </div>
+                        ) : (
+                          // Staff Upload Portal (Only in Working column)
+                          task.status === 'in-progress' && task.assignedTo === currentUser?.id && (
+                             <div className="staff-upload-portal">
+                               <input 
+                                 type="file" 
+                                 id={`submit-${task.id}`} 
+                                 style={{ display: 'none' }} 
+                                 onChange={e => {
+                                   const file = e.target.files?.[0];
+                                   if (file) handleWorkSubmission(task.id, file);
+                                 }} 
+                               />
+                               <label htmlFor={`submit-${task.id}`} className="btn-secondary work-submit-btn" onClick={(e) => e.stopPropagation()}>
+                                 {uploadingTaskId === task.id ? <Loader2 size={12} className="animate-spin" /> : <UploadCloud size={12} />}
+                                 Submit Result
+                               </label>
+                             </div>
+                          )
+                        )}
+                      </div>
 
                       <div className="card-footer">
                         <div className="task-meta">
@@ -1446,9 +1805,9 @@ const App: React.FC = () => {
                         <div className="review-actions">
                           {/* Only Admin or the Creator can 'Accept' (Move to Done) an Admin task */}
                           {(isAdmin || task.createdBy === currentUser?.id) && (
-                            <button className="review-btn accept" onClick={() => moveTask(task.id, 'done')}>Accept</button>
+                            <button className="review-btn accept" onClick={(e) => { e.stopPropagation(); moveTask(task.id, 'done'); }}>Accept</button>
                           )}
-                          <button className="review-btn reject" onClick={() => moveTask(task.id, 'in-progress')}>Reject</button>
+                          <button className="review-btn reject" onClick={(e) => { e.stopPropagation(); moveTask(task.id, 'in-progress'); }}>Reject</button>
                         </div>
                       )}
                     </motion.div>
@@ -1462,232 +1821,6 @@ const App: React.FC = () => {
           ))}
         </div>
 
-      </div>
-    );
-  };
-
-  const renderMeetings = () => {
-    const [localStream, setLocalStream] = useState<MediaStream | null>(null);
-    const [isMuted, setIsMuted] = useState(false);
-    const [isCameraOff, setIsCameraOff] = useState(false);
-    const [remoteStreams, setRemoteStreams] = useState<Record<string, { stream: MediaStream, name: string }>>({});
-    const peerConnections = useRef<Record<string, RTCPeerConnection>>({});
-    const localVideoRef = useRef<HTMLVideoElement>(null);
-
-    const toggleMic = () => {
-      if (localStream) {
-        localStream.getAudioTracks().forEach(track => track.enabled = !track.enabled);
-        setIsMuted(!isMuted);
-      }
-    };
-
-    const toggleCamera = () => {
-      if (localStream) {
-        localStream.getVideoTracks().forEach(track => track.enabled = !track.enabled);
-        setIsCameraOff(!isCameraOff);
-      }
-    };
-
-    // Sync local video stream to element
-    useEffect(() => {
-      if (localVideoRef.current && localStream) {
-        localVideoRef.current.srcObject = localStream;
-      }
-    }, [localStream]);
-
-    const iceServers = {
-      iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
-    };
-
-    const startCall = async () => {
-      try {
-        const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
-        setLocalStream(stream);
-        if (localVideoRef.current) localVideoRef.current.srcObject = stream;
-
-        // Signal presence (Invite others)
-        await supabase.from('meeting_signals').insert([{
-           sender_id: currentUser?.id,
-           type: 'presence',
-           data: { name: currentUser?.full_name }
-        }]);
-      } catch (err) {
-        console.error("Media Error:", err);
-        alert("Failed to access camera/mic.");
-      }
-    };
-
-    useEffect(() => {
-      if (!isLoggedIn || !currentUser) return;
-
-      const channel = supabase.channel('meeting-signals')
-        .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'meeting_signals' }, async (payload) => {
-          const signal = payload.new;
-          if (signal.sender_id === currentUser.id) return;
-
-          // Simple WebRTC Signaling Logic
-          if (signal.type === 'presence') {
-             // Someone joined! Create offer
-             const pc = createPeerConnection(signal.sender_id, signal.data.name);
-             const offer = await pc.createOffer();
-             await pc.setLocalDescription(offer);
-             
-             await supabase.from('meeting_signals').insert([{
-                sender_id: currentUser.id,
-                receiver_id: signal.sender_id,
-                type: 'offer',
-                data: offer
-             }]);
-          } else if (signal.type === 'offer' && signal.receiver_id === currentUser.id) {
-             const pc = createPeerConnection(signal.sender_id, "Teammate");
-             await pc.setRemoteDescription(new RTCSessionDescription(signal.data));
-             const answer = await pc.createAnswer();
-             await pc.setLocalDescription(answer);
-
-             await supabase.from('meeting_signals').insert([{
-                sender_id: currentUser.id,
-                receiver_id: signal.sender_id,
-                type: 'answer',
-                data: answer
-             }]);
-          } else if (signal.type === 'answer' && signal.receiver_id === currentUser.id) {
-             const pc = peerConnections.current[signal.sender_id];
-             if (pc) await pc.setRemoteDescription(new RTCSessionDescription(signal.data));
-          } else if (signal.type === 'candidate' && signal.receiver_id === currentUser.id) {
-             const pc = peerConnections.current[signal.sender_id];
-             if (pc) await pc.addIceCandidate(new RTCIceCandidate(signal.data));
-          }
-        })
-        .subscribe();
-
-      return () => {
-        channel.unsubscribe();
-        Object.values(peerConnections.current).forEach(pc => pc.close());
-        localStream?.getTracks().forEach(t => t.stop());
-      };
-    }, [isLoggedIn, currentUser, localStream]);
-
-    const createPeerConnection = (id: string, name: string) => {
-      const pc = new RTCPeerConnection(iceServers);
-      
-      if (localStream) {
-        localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
-      }
-
-      pc.onicecandidate = (event) => {
-        if (event.candidate) {
-          supabase.from('meeting_signals').insert([{
-             sender_id: currentUser?.id,
-             receiver_id: id,
-             type: 'candidate',
-             data: event.candidate
-          }]);
-        }
-      };
-
-      pc.ontrack = (event) => {
-        setRemoteStreams(prev => ({ 
-          ...prev, 
-          [id]: { stream: event.streams[0], name } 
-        }));
-      };
-
-      peerConnections.current[id] = pc;
-      return pc;
-    };
-
-    const endCall = () => {
-      localStream?.getTracks().forEach(track => track.stop());
-      setLocalStream(null);
-      Object.values(peerConnections.current).forEach(pc => pc.close());
-      peerConnections.current = {};
-      setRemoteStreams({});
-      
-      // Notify others of departure
-      supabase.from('meeting_signals').insert([{
-         sender_id: currentUser?.id,
-         type: 'departure',
-         data: { name: currentUser?.full_name }
-      }]);
-    };
-
-    return (
-      <div className="animate-fade-in" style={{ height: '100%', display: 'flex', flexDirection: 'column', background: '#0a0a0b' }}>
-        <div className="content-header" style={{ padding: '1rem 1.5rem', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
-          <div className="title-group">
-            <h1 style={{ fontSize: '1.25rem' }}>Nova Native Conference</h1>
-            <p style={{ fontSize: '0.8rem' }}>Infrastructure: Supabase Signaling Engine (P2P)</p>
-          </div>
-          <div style={{ display: 'flex', gap: '8px' }}>
-            {localStream && (
-              <>
-                <button onClick={toggleMic} className="nav-item" style={{ width: 40, height: 40, borderRadius: '50%', background: isMuted ? 'rgba(239,68,68,0.2)' : 'rgba(255,255,255,0.05)', color: isMuted ? '#ef4444' : 'var(--text-primary)' }}>
-                   {isMuted ? <MicOff size={18} /> : <Mic size={18} />}
-                </button>
-                <button onClick={toggleCamera} className="nav-item" style={{ width: 40, height: 40, borderRadius: '50%', background: isCameraOff ? 'rgba(239,68,68,0.2)' : 'rgba(255,255,255,0.05)', color: isCameraOff ? '#ef4444' : 'var(--text-primary)' }}>
-                   {isCameraOff ? <VideoOff size={18} /> : <Video size={18} />}
-                </button>
-              </>
-            )}
-            {!localStream ? (
-              <button onClick={startCall} className="btn-primary" style={{ padding: '8px 16px', fontSize: '0.8rem' }}>
-                <Video size={14} /> Join Meeting
-              </button>
-            ) : (
-              <button onClick={endCall} className="btn-primary" style={{ padding: '8px 16px', fontSize: '0.8rem', background: '#ef4444', borderColor: '#ef4444' }}>
-                <LogOut size={14} /> Leave Meeting
-              </button>
-            )}
-          </div>
-        </div>
-        
-        <div style={{ flex: 1, padding: '1rem', display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '1rem', overflowY: 'auto' }}>
-          {/* Local Video */}
-          {localStream && (
-            <div style={{ position: 'relative', background: '#151518', borderRadius: '16px', overflow: 'hidden', border: '2px solid var(--accent-primary)', boxShadow: '0 0 20px rgba(59, 130, 246, 0.2)' }}>
-              <video ref={localVideoRef} autoPlay muted playsInline style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
-              <div style={{ position: 'absolute', bottom: '12px', left: '12px', background: 'rgba(0,0,0,0.7)', padding: '6px 12px', borderRadius: '12px', fontSize: '0.75rem', color: 'white', backdropFilter: 'blur(4px)' }}>
-                You (Host)
-              </div>
-            </div>
-          )}
-
-          {/* Remote Videos */}
-          {Object.entries(remoteStreams).map(([id, data]) => (
-             <div key={id} style={{ position: 'relative', background: '#151518', borderRadius: '16px', overflow: 'hidden', border: '1px solid rgba(255,255,255,0.1)' }}>
-                <video 
-                  autoPlay 
-                  playsInline 
-                  ref={el => { if (el) el.srcObject = data.stream; }} 
-                  style={{ width: '100%', height: '100%', objectFit: 'cover' }} 
-                />
-                <div style={{ position: 'absolute', bottom: '12px', left: '12px', background: 'rgba(0,0,0,0.7)', padding: '6px 12px', borderRadius: '12px', fontSize: '0.75rem', color: 'white', backdropFilter: 'blur(4px)' }}>
-                  {data.name}
-                </div>
-             </div>
-          ))}
-
-          {!localStream && (
-            <div style={{ gridColumn: '1/-1', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', opacity: 0.5 }}>
-               <div style={{ width: 80, height: 80, borderRadius: '50%', background: 'rgba(255,255,255,0.03)', display: 'grid', placeItems: 'center', marginBottom: '1.5rem', border: '1px solid var(--glass-border)' }}>
-                  <Video size={32} />
-               </div>
-               <h3>Ready to join?</h3>
-               <p style={{ maxWidth: '300px', textAlign: 'center', fontSize: '0.9rem', marginTop: '0.5rem' }}>Any user can start or join this room. Click the button above to enable your camera and connect with the team.</p>
-            </div>
-          )}
-        </div>
-        
-        <div style={{ padding: '0.75rem 1.5rem', background: 'rgba(255,255,255,0.02)', borderTop: '1px solid rgba(255,255,255,0.05)', fontSize: '0.75rem', color: 'var(--text-muted)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '15px' }}>
-             <span style={{ color: localStream ? '#10b981' : 'inherit' }}>● {localStream ? 'Live Mode' : 'Offline'}</span>
-             <span>Active Speakers: {Object.keys(remoteStreams).length + (localStream ? 1 : 0)}</span>
-          </div>
-          <div style={{ display: 'flex', gap: '15px' }}>
-             <span>Protocol: WebRTC Secure</span>
-             <span style={{ color: 'rgba(255,255,255,0.1)' }}>NO-SERVER-MEDIA</span>
-          </div>
-        </div>
       </div>
     );
   };
@@ -1710,7 +1843,7 @@ const App: React.FC = () => {
       timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
       createdAt: Date.now()
     };
-    setMessengerMessages(prev => [...prev, optimisticMsg]);
+    setMessengerMessages((prev: any[]) => [...prev, optimisticMsg]);
 
     try {
       const messageData: any = {
@@ -1726,13 +1859,13 @@ const App: React.FC = () => {
       const { data, error } = await supabase.from('messenger_messages').insert([messageData]).select();
 
       if (error) {
-        setMessengerMessages(prev => prev.filter(m => m.id !== tempId));
+        setMessengerMessages((prev: any[]) => prev.filter((m: any) => m.id !== tempId));
         throw error;
       }
       
       // Update the optimistic message with the real server ID
       if (data && data[0]) {
-         setMessengerMessages(prev => prev.map(m => m.id === tempId ? { ...m, id: data[0].id } : m));
+         setMessengerMessages((prev: any[]) => prev.map((m: any) => m.id === tempId ? { ...m, id: data[0].id } : m));
       }
     } catch (err) {
       console.error('Send message error:', err);
@@ -1740,7 +1873,7 @@ const App: React.FC = () => {
   };
 
   const renderMessenger = () => {
-    const filteredMessages = messengerMessages.filter(m => {
+    const filteredMessages = messengerMessages.filter((m: any) => {
       if (selectedChatUserId) {
         // Private Chat: either (I sent to them) OR (They sent to me)
         return (m.senderId === currentUser?.id && m.receiverId === selectedChatUserId) ||
@@ -1754,7 +1887,7 @@ const App: React.FC = () => {
 
         // Clients ONLY see broadcast messages from Administrators
         if (currentUser?.category === 'Client') {
-          const sender = allUsers.find(u => u.id === m.senderId);
+          const sender = allUsers.find((u: any) => u.id === m.senderId);
           return sender?.role === 'admin';
         }
 
@@ -1764,7 +1897,7 @@ const App: React.FC = () => {
       }
     });
 
-    const activeChatUser = allUsers.find(u => u.id === selectedChatUserId);
+    const activeChatUser = allUsers.find((u: any) => u.id === selectedChatUserId);
 
     return (
       <div className="animate-fade-in" style={{ height: '100%', display: 'flex', background: 'var(--bg-primary)' }}>
@@ -1775,7 +1908,7 @@ const App: React.FC = () => {
             <div 
               onClick={() => {
                 setSelectedChatUserId(null);
-                setUnreadCounts(prev => ({ ...prev, global: 0 }));
+                setUnreadCounts((prev: any) => ({ ...prev, global: 0 }));
               }}
               style={{ padding: '12px 16px', cursor: 'pointer', background: !selectedChatUserId ? 'rgba(59, 130, 246, 0.1)' : 'transparent', borderLeft: !selectedChatUserId ? '3px solid var(--accent-primary)' : '3px solid transparent', display: 'flex', alignItems: 'center', gap: '10px', fontSize: '0.85rem', transition: 'all 0.2s', position: 'relative' }}
             >
@@ -1787,16 +1920,19 @@ const App: React.FC = () => {
             </div>
             
             {(isAdmin 
-              ? allUsers.filter(u => u.id !== currentUser?.id)
-              : currentUser?.category === 'Client'
+              ? allUsers.filter((u: any) => u.id !== currentUser?.id)
+              : (currentUser?.category || 'Staff').toLowerCase() === 'client'
                 ? allUsers.filter(u => u.role === 'admin')
-                : allUsers.filter(u => u.id !== currentUser?.id && (u.role === 'admin' || u.category === currentUser?.category))
+                : allUsers.filter((u: any) => u.id !== currentUser?.id && (
+                    u.role === 'admin' || 
+                    (u.category || 'Staff').toLowerCase() === (currentUser?.category || 'Staff').toLowerCase()
+                  ))
             ).map(user => (
               <div 
                 key={user.id}
                 onClick={() => {
                   setSelectedChatUserId(user.id);
-                  setUnreadCounts(prev => ({ ...prev, [user.id]: 0 }));
+                  setUnreadCounts((prev: any) => ({ ...prev, [user.id]: 0 }));
                 }}
                 style={{ padding: '12px 16px', cursor: 'pointer', background: selectedChatUserId === user.id ? 'rgba(59, 130, 246, 0.1)' : 'transparent', borderLeft: selectedChatUserId === user.id ? '3px solid var(--accent-primary)' : '3px solid transparent', display: 'flex', alignItems: 'center', gap: '10px', fontSize: '0.85rem', transition: 'all 0.2s', position: 'relative' }}
               >
@@ -1830,7 +1966,7 @@ const App: React.FC = () => {
                 </div>
               </div>
             ) : (
-              filteredMessages.map(m => (
+              filteredMessages.map((m: any) => (
                 <div 
                   key={m.id} 
                   style={{ 
@@ -1892,14 +2028,14 @@ const App: React.FC = () => {
       <div className="content-header"><div className="title-group"><h1>System Dashboard</h1><p>Real-time analytics overview.</p></div></div>
       <div className="stats-grid">
         <div className="card stat-card"><div className="stat-label">Reports Dispatched</div><div className="stat-value">{sentHistory.length}</div></div>
-        <div className="card stat-card" style={{ borderLeftColor: '#10b981' }}><div className="stat-label">Success Rate</div><div className="stat-value">{sentHistory.length > 0 ? Math.round((sentHistory.filter(h => h.status === 'success').length / sentHistory.length) * 100) : 0}%</div></div>
+        <div className="card stat-card" style={{ borderLeftColor: '#10b981' }}><div className="stat-label">Success Rate</div><div className="stat-value">{sentHistory.length > 0 ? Math.round((sentHistory.filter((h: any) => h.status === 'success').length / sentHistory.length) * 100) : 0}%</div></div>
         <div className="card stat-card" style={{ borderLeftColor: 'var(--accent-secondary)' }}><div className="stat-label">Active Templates</div><div className="stat-value">{dynamicReports.length}</div></div>
       </div>
       <div className="card" style={{ marginTop: '1.5rem' }}>
         <h3>Recent Activity</h3>
         <div className="history-table-container" style={{ marginTop: '1rem' }}>
           <table className="history-table"><thead><tr><th>Complainant</th><th>Problem</th><th>Status</th></tr></thead>
-            <tbody>{sentHistory.slice(0, 5).map(i => (<tr key={i.id}><td>{i.complainantName}</td><td>{i.problem}</td><td><span className={`status-badge ${i.status === 'success' ? 'status-success' : 'status-error'}`}>{i.status}</span></td></tr>))}
+            <tbody>{sentHistory.slice(0, 5).map((i: any) => (<tr key={i.id}><td>{i.complainantName}</td><td>{i.problem}</td><td><span className={`status-badge ${i.status === 'success' ? 'status-success' : 'status-error'}`}>{i.status}</span></td></tr>))}
               {sentHistory.length === 0 && <tr><td colSpan={3} style={{ textAlign: 'center', color: 'var(--text-muted)' }}>No recent activity.</td></tr>}
             </tbody></table>
         </div>
@@ -1908,7 +2044,7 @@ const App: React.FC = () => {
         <h3>Client Complaints Pipeline</h3>
         <div className="history-table-container" style={{ marginTop: '1rem' }}>
           <table className="history-table"><thead><tr><th>Date</th><th>Client</th><th>Type</th><th>Description</th></tr></thead>
-            <tbody>{clientComplaints.length > 0 ? clientComplaints.map(c => (<tr key={c.id}><td style={{ fontSize: '0.85rem' }}>{c.timestamp}</td><td><div style={{ fontWeight: 600 }}>{c.name}</div><div style={{ fontSize: '0.85rem', color: 'var(--accent-primary)' }}>{c.email}</div></td><td><span className={`status-badge ${c.type === 'website' ? 'status-success' : 'status-pending'}`}>{c.type === 'website' ? 'Website' : 'Support'}</span></td><td>{c.problem}</td></tr>)) :
+            <tbody>{clientComplaints.length > 0 ? clientComplaints.map((c: any) => (<tr key={c.id}><td style={{ fontSize: '0.85rem' }}>{c.timestamp}</td><td><div style={{ fontWeight: 600 }}>{c.name}</div><div style={{ fontSize: '0.85rem', color: 'var(--accent-primary)' }}>{c.email}</div></td><td><span className={`status-badge ${c.type === 'website' ? 'status-success' : 'status-pending'}`}>{c.type === 'website' ? 'Website' : 'Support'}</span></td><td>{c.problem}</td></tr>)) :
               <tr><td colSpan={4} style={{ textAlign: 'center', color: 'var(--text-muted)', padding: '2rem' }}>No pending complaints.</td></tr>}
             </tbody></table>
         </div>
@@ -1922,7 +2058,7 @@ const App: React.FC = () => {
       <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
         {sentHistory.length > 0 ? (
           <div className="history-table-container"><table className="history-table"><thead><tr><th>Date</th><th>Complainant</th><th>Email</th><th>Problem</th><th>Status</th></tr></thead>
-            <tbody>{sentHistory.map(i => (<tr key={i.id}><td style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>{i.timestamp}</td><td style={{ fontWeight: 600 }}>{i.complainantName}</td><td>{i.recipient}</td><td>{i.problem}</td><td><span className={`status-badge ${i.status === 'success' ? 'status-success' : 'status-error'}`}>{i.status}</span></td></tr>))}</tbody></table></div>
+            <tbody>{sentHistory.map((i: any) => (<tr key={i.id}><td style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>{i.timestamp}</td><td style={{ fontWeight: 600 }}>{i.complainantName}</td><td>{i.recipient}</td><td>{i.problem}</td><td><span className={`status-badge ${i.status === 'success' ? 'status-success' : 'status-error'}`}>{i.status}</span></td></tr>))}</tbody></table></div>
         ) : (<div className="empty-state"><FileText size={48} className="empty-state-icon" /><h3>No reports sent yet</h3><p>Use the Email Sender to get started.</p></div>)}
       </div>
     </div>
@@ -2131,7 +2267,6 @@ const App: React.FC = () => {
     switch (type) {
       case 'dashboard': return renderDashboard();
       case 'kanban': return renderKanban();
-      case 'meetings': return renderMeetings();
       case 'messenger': return renderMessenger();
       case 'reports': return renderHistory();
       case 'users': return isAdmin ? <UserManagement currentUserId={currentUser?.id} onChat={(uid) => { setSelectedChatUserId(uid); openApp('messenger'); }} /> : <div className="card">Unauthorized Access</div>;
@@ -2449,9 +2584,9 @@ const App: React.FC = () => {
                   >
                     <option value="">Myself</option>
                     {allUsers
-                      .filter(u => u.id !== currentUser?.id) // Can't select self in list (it's 'Myself')
-                      .filter(u => isAdmin || u.role !== 'admin') // Non-admins CANNOT assign tasks to Admins
-                      .map(user => (
+                      .filter((u: any) => u.id !== currentUser?.id)
+                      .filter((u: any) => isAdmin || u.role !== 'admin')
+                      .map((user: any) => (
                         <option key={user.id} value={user.id}>{user.full_name} (@{user.username}){user.role === 'admin' ? ' [ADMIN]' : ''}</option>
                       ))}
                   </select>
@@ -2463,11 +2598,29 @@ const App: React.FC = () => {
                     className="terminal-input"
                     value={newTask.dueAt}
                     onChange={e => setNewTask({ ...newTask, dueAt: e.target.value })}
-                    onClick={(e) => (e.target as any).showPicker?.()}
-                    onFocus={(e) => (e.target as any).showPicker?.()}
                     min={new Date(new Date().getTime() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 16)}
                     required
                   />
+                </div>
+                <div className="input-group">
+                  <label style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    <Paperclip size={14} /> Initial Attachment (Optional)
+                  </label>
+                  <div className="file-upload-zone">
+                    <input
+                      type="file"
+                      id="task-file-input"
+                      style={{ display: 'none' }}
+                      onChange={e => setNewTask({ ...newTask, attachmentFile: e.target.files?.[0] || null })}
+                    />
+                    <label htmlFor="task-file-input" className="file-upload-label">
+                      {newTask.attachmentFile ? (
+                        <span style={{ color: 'var(--accent-primary)' }}>{newTask.attachmentFile.name}</span>
+                      ) : (
+                        <span>Click to attach instructions or starting files</span>
+                      )}
+                    </label>
+                  </div>
                 </div>
                 <div style={{ display: 'flex', gap: '0.75rem', marginTop: '1.5rem' }}>
                   <button type="submit" disabled={isTaskSubmitting} className="btn-primary" style={{ flex: 1, justifyContent: 'center' }}>
@@ -2483,7 +2636,12 @@ const App: React.FC = () => {
 
       {/* macOS Dock */}
       <div className={`macos-dock ${openWindows.some(w => w.fullscreen && !w.minimized) ? 'dock-hidden' : ''}`}>
-        {DOCK_APPS.filter(app => !(app as any).adminOnly || isAdmin).map((app, i) => {
+        {DOCK_APPS.filter(app => {
+          if ((app as any).adminOnly && !isAdmin) return false;
+          // Private users CANNOT see dashboard
+          if (app.type === 'dashboard' && currentUser?.category?.toLowerCase() === 'private') return false;
+          return true;
+        }).map((app, i) => {
           const isOpen = openWindows.some(w => w.type === app.type);
           return (
             <React.Fragment key={app.type}>
@@ -2526,8 +2684,10 @@ const App: React.FC = () => {
       <AnimatePresence>{isSent && <motion.div initial={{ opacity: 0, y: 50 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 50 }} style={{ position: 'fixed', bottom: '90px', right: '30px', background: '#10b981', color: 'white', padding: '0.8rem 1.5rem', borderRadius: '12px', display: 'flex', alignItems: 'center', gap: '10px', zIndex: 9999, fontSize: '0.9rem' }}><CheckCircle size={18} />Transmission complete!</motion.div>}</AnimatePresence>
 
       {/* Global Lottie Animations */}
-      <LoadingOverlay show={isSending || isAiGenerating || kanbanAiGenerating || isTaskSubmitting || isLoggingIn} />
+      <LoadingOverlay show={isSending || isAiGenerating || kanbanAiGenerating || isTaskSubmitting || isLoggingIn || isSystemBooting} />
       <NovaRobot isVisible={isAdmin} />
+      
+      {renderTaskDetailModal()}
     </div>
   );
 };
