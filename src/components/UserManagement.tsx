@@ -9,6 +9,7 @@ interface AppUser {
   full_name: string;
   email: string | null;
   role: 'admin' | 'user';
+  category: string;
   is_active: boolean;
   created_at: string;
 }
@@ -27,7 +28,8 @@ const UserManagement: React.FC<UserManagementProps> = ({ currentUserId, onChat }
     password: '',
     full_name: '',
     email: '',
-    role: 'user' as 'admin' | 'user'
+    role: 'user' as 'admin' | 'user',
+    category: 'Staff'
   });
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
@@ -68,14 +70,15 @@ const UserManagement: React.FC<UserManagementProps> = ({ currentUserId, onChat }
         password: newUser.password,
         full_name: newUser.full_name,
         email: newUser.email || null,
-        role: newUser.role
+        role: newUser.role,
+        category: newUser.category
       }]);
 
     if (insertError) {
       setError(insertError.message.includes('unique') ? 'Username already exists' : 'Failed to create user');
     } else {
       setSuccess('User created successfully');
-      setNewUser({ username: '', password: '', full_name: '', email: '', role: 'user' });
+      setNewUser({ username: '', password: '', full_name: '', email: '', role: 'user', category: 'Staff' });
       setIsAdding(false);
       fetchUsers();
     }
@@ -179,6 +182,19 @@ const UserManagement: React.FC<UserManagementProps> = ({ currentUserId, onChat }
                   <option value="admin">Administrator</option>
                 </select>
               </div>
+              <div className="input-group">
+                <label>Category (Visibility Group)</label>
+                <select 
+                  className="terminal-input"
+                  value={newUser.category}
+                  onChange={e => setNewUser({...newUser, category: e.target.value})}
+                >
+                  <option value="Staff">Staff (Internal)</option>
+                  <option value="Client">Client (External)</option>
+                  <option value="Guest">Guest</option>
+                  <option value="Private">Private (Hidden)</option>
+                </select>
+              </div>
               <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'flex-end', paddingBottom: '1.25rem' }}>
                 <button type="submit" className="btn-primary" style={{ flex: 1, justifyContent: 'center' }}>Save User</button>
                 <button type="button" className="nav-item" onClick={() => setIsAdding(false)}>Cancel</button>
@@ -224,7 +240,7 @@ const UserManagement: React.FC<UserManagementProps> = ({ currentUserId, onChat }
               <thead>
                 <tr>
                   <th>User</th>
-                  <th>Role</th>
+                  <th>Role / Group</th>
                   <th>Created</th>
                   <th>Actions</th>
                 </tr>
@@ -252,13 +268,17 @@ const UserManagement: React.FC<UserManagementProps> = ({ currentUserId, onChat }
                       </div>
                     </td>
                     <td>
-                      <span className={`status-badge ${user.role === 'admin' ? 'status-success' : 'status-pending'}`} style={{ 
-                        background: user.role === 'admin' ? 'rgba(139, 92, 246, 0.1)' : 'rgba(59, 130, 246, 0.1)',
-                        color: user.role === 'admin' ? '#a78bfa' : '#60a5fa',
-                        borderColor: user.role === 'admin' ? 'rgba(139, 92, 246, 0.2)' : 'rgba(59, 130, 246, 0.2)'
-                      }}>
-                        {user.role.toUpperCase()}
-                      </span>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                        <span className={`status-badge ${user.role === 'admin' ? 'status-success' : 'status-pending'}`} style={{ 
+                          background: user.role === 'admin' ? 'rgba(139, 92, 246, 0.1)' : 'rgba(59, 130, 246, 0.1)',
+                          color: user.role === 'admin' ? '#a78bfa' : '#60a5fa',
+                          borderColor: user.role === 'admin' ? 'rgba(139, 92, 246, 0.2)' : 'rgba(59, 130, 246, 0.2)',
+                          fontSize: '0.65rem'
+                        }}>
+                          {user.role.toUpperCase()}
+                        </span>
+                        <span style={{ fontSize: '0.75rem', opacity: 0.6 }}>{user.category}</span>
+                      </div>
                     </td>
                     <td style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
                       {new Date(user.created_at).toLocaleDateString()}

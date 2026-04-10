@@ -42,6 +42,7 @@ interface AppUser {
   username: string;
   full_name: string;
   role: 'admin' | 'user';
+  category?: string;
 }
 
 const DOCK_APPS = [
@@ -93,13 +94,36 @@ const playWelcomeVoice = (text: string) => {
   }
 
   if (smoothVoice) {
-    console.log("Using Smooth Female Voice:", smoothVoice.name);
     msg.voice = smoothVoice;
-  } else {
-    console.warn("Female voice not found! Available:", voices.map(v => v.name).join(', '));
   }
-  
   window.speechSynthesis.speak(msg);
+};
+
+const playBellSound = () => {
+  try {
+    const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
+    const oscillator = audioCtx.createOscillator();
+    const gainNode = audioCtx.createGain();
+
+    oscillator.connect(gainNode);
+    gainNode.connect(audioCtx.destination);
+
+    // Professional "Messenger Pop" profile
+    oscillator.type = 'sine';
+    const now = audioCtx.currentTime;
+    
+    // Quick pitch slide for that "poppy" feel
+    oscillator.frequency.setValueAtTime(587.33, now); // D5
+    oscillator.frequency.exponentialRampToValueAtTime(880, now + 0.05); // A5
+    
+    // Smooth fade-out envelope
+    gainNode.gain.setValueAtTime(0, now);
+    gainNode.gain.linearRampToValueAtTime(0.3, now + 0.02);
+    gainNode.gain.exponentialRampToValueAtTime(0.01, now + 0.25);
+
+    oscillator.start(now);
+    oscillator.stop(now + 0.25);
+  } catch (e) {}
 };
 
 const App: React.FC = () => {
@@ -180,8 +204,20 @@ const App: React.FC = () => {
   const [messengerMessages, setMessengerMessages] = useState<any[]>([]);
   const [selectedChatUserId, setSelectedChatUserId] = useState<string | null>(null);
   const [messengerInput, setMessengerInput] = useState('');
+  const [unreadCounts, setUnreadCounts] = useState<Record<string, number>>({});
   const [isListening, setIsListening] = useState(false);
+  const selectedChatRef = useRef<string | null>(null);
+  const openWindowsRef = useRef<OpenWindow[]>([]);
+  const notifiedIdsRef = useRef(new Set<string>());
   const recognitionRef = useRef<any>(null);
+
+  useEffect(() => {
+    selectedChatRef.current = selectedChatUserId;
+  }, [selectedChatUserId]);
+
+  useEffect(() => {
+    openWindowsRef.current = openWindows;
+  }, [openWindows]);
 
   useEffect(() => {
     const t = setInterval(() => setCurrentTime(new Date()), 1000);
@@ -221,6 +257,27 @@ const App: React.FC = () => {
         // Filter out any optimistic messages that now exist in serverMsgs (by text match for safety)
         const unsyncedOptimistic = optimistic.filter(om => !serverMsgs.some(sm => sm.text === om.text && sm.senderId === om.senderId));
         
+        // Notifications for polled messages (fallback if real-time fails)
+        const isMessengerOpen = openWindowsRef.current.some(w => w.type === 'messenger' && !w.minimized);
+        const currentTopic = selectedChatRef.current;
+
+        serverMsgs.forEach(m => {
+          if (m.senderId !== currentUser?.id && !prev.some(p => p.id === m.id) && !notifiedIdsRef.current.has(m.id)) {
+            // This is a NEW message we haven't notified for yet
+            notifiedIdsRef.current.add(m.id);
+
+            const isCurrentThread = m.receiverId === null 
+              ? (isMessengerOpen && currentTopic === null)
+              : (isMessengerOpen && currentTopic === m.senderId);
+
+            playBellSound();
+            if (!isCurrentThread) {
+              const key = m.receiverId === null ? 'global' : m.senderId;
+              setUnreadCounts(u => ({ ...u, [key]: (u[key] || 0) + 1 }));
+            }
+          }
+        });
+
         // Combine and sort
         const combined = [...serverMsgs, ...unsyncedOptimistic];
         return combined.sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
@@ -240,26 +297,77 @@ const App: React.FC = () => {
       }, (payload) => {
         if (payload.eventType === 'INSERT') {
           const m = payload.new;
-          setMessengerMessages(prev => {
-            if (prev.some(it => it.id === m.id)) return prev;
-            return [...prev, {
-              id: m.id,
-              text: m.text,
-              senderId: m.sender_id,
-              senderName: m.sender_name,
-              receiverId: m.receiver_id,
-              timestamp: m.created_at ? new Date(m.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-              createdAt: m.created_at ? new Date(m.created_at).getTime() : Date.now()
-            }];
-          });
+          
+          if (m.sender_id !== currentUser?.id) {
+            setMessengerMessages(prev => {
+              const isDuplicate = prev.some(it => it.id === m.id);
+              if (isDuplicate) return prev;
+
+              // Notification check with registry
+              if (!notifiedIdsRef.current.has(m.id)) {
+                notifiedIdsRef.current.add(m.id);
+
+                // Notification Logic (Fresh state check)
+                const isMessengerOpen = openWindowsRef.current.some(w => w.type === 'messenger' && !w.minimized);
+                const currentTopic = selectedChatRef.current;
+                const isCurrentThread = m.receiver_id === null 
+                  ? (isMessengerOpen && currentTopic === null)
+                  : (isMessengerOpen && currentTopic === m.sender_id);
+
+                // Fresh message - Trigger notification
+                playBellSound();
+                if (!isCurrentThread) {
+                  const key = m.receiver_id === null ? 'global' : m.sender_id;
+                  setUnreadCounts(u => ({ ...u, [key]: (u[key] || 0) + 1 }));
+                }
+              }
+
+              return [...prev, {
+                id: m.id,
+                text: m.text,
+                senderId: m.sender_id,
+                senderName: m.sender_name,
+                receiverId: m.receiver_id,
+                timestamp: m.created_at ? new Date(m.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+                createdAt: m.created_at ? new Date(m.created_at).getTime() : Date.now()
+              }];
+            });
+          } else {
+            // My own message (already handled by optimistic UI usually, but good to have safety)
+            setMessengerMessages(prev => {
+              if (prev.some(it => it.id === m.id)) return prev;
+              return [...prev, {
+                id: m.id,
+                text: m.text,
+                senderId: m.sender_id,
+                senderName: m.sender_name,
+                receiverId: m.receiver_id,
+                timestamp: m.created_at ? new Date(m.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+                createdAt: m.created_at ? new Date(m.created_at).getTime() : Date.now()
+              }];
+            });
+          }
         }
       })
       .subscribe();
 
     const pollInterval = setInterval(fetchChatHistory, 5000); // 5s Polling Fallback
 
+    const userChannel = supabase.channel('realtime_users')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'app_users' }, (payload) => {
+        if (payload.eventType === 'INSERT') {
+          setAllUsers(prev => [...prev, payload.new as AppUser]);
+        } else if (payload.eventType === 'UPDATE') {
+          setAllUsers(prev => prev.map(u => u.id === payload.new.id ? payload.new as AppUser : u));
+        } else if (payload.eventType === 'DELETE') {
+          setAllUsers(prev => prev.filter(u => u.id !== payload.old.id));
+        }
+      })
+      .subscribe();
+
     return () => { 
       supabase.removeChannel(channel); 
+      supabase.removeChannel(userChannel);
       clearInterval(pollInterval);
     };
   }, [isLoggedIn, currentUser, fetchChatHistory]);
@@ -585,7 +693,7 @@ const App: React.FC = () => {
       }
 
       // 5. Fetch Users
-      const { data: users, error: usersError } = await supabase.from('app_users').select('id, username, full_name, role');
+      const { data: users, error: usersError } = await supabase.from('app_users').select('id, username, full_name, role, category');
       if (usersError) console.error('Users Fetch Error:', usersError);
       if (users) setAllUsers(users);
 
@@ -781,7 +889,8 @@ const App: React.FC = () => {
         id: data.id,
         username: data.username,
         full_name: data.full_name,
-        role: data.role
+        role: data.role,
+        category: data.category
       };
 
       setCurrentUser(userInfo);
@@ -1638,7 +1747,20 @@ const App: React.FC = () => {
                (m.senderId === selectedChatUserId && m.receiverId === currentUser?.id);
       } else {
         // Group Chat: receiverId is null
-        return !m.receiverId;
+        if (m.receiverId) return false;
+        
+        // Administrators see all global transmissions
+        if (isAdmin) return true;
+
+        // Clients ONLY see broadcast messages from Administrators
+        if (currentUser?.category === 'Client') {
+          const sender = allUsers.find(u => u.id === m.senderId);
+          return sender?.role === 'admin';
+        }
+
+        // Other Users see global messages from Admins OR users in their same category
+        const sender = allUsers.find(u => u.id === m.senderId);
+        return sender?.role === 'admin' || sender?.category === currentUser?.category;
       }
     });
 
@@ -1651,23 +1773,40 @@ const App: React.FC = () => {
           <div style={{ padding: '1rem', borderBottom: '1px solid var(--glass-border)', fontWeight: 600, fontSize: '0.85rem', color: 'var(--text-secondary)' }}>Conversations</div>
           <div style={{ flex: 1, overflowY: 'auto' }}>
             <div 
-              onClick={() => setSelectedChatUserId(null)}
-              style={{ padding: '12px 16px', cursor: 'pointer', background: !selectedChatUserId ? 'rgba(59, 130, 246, 0.1)' : 'transparent', borderLeft: !selectedChatUserId ? '3px solid var(--accent-primary)' : '3px solid transparent', display: 'flex', alignItems: 'center', gap: '10px', fontSize: '0.85rem', transition: 'all 0.2s' }}
+              onClick={() => {
+                setSelectedChatUserId(null);
+                setUnreadCounts(prev => ({ ...prev, global: 0 }));
+              }}
+              style={{ padding: '12px 16px', cursor: 'pointer', background: !selectedChatUserId ? 'rgba(59, 130, 246, 0.1)' : 'transparent', borderLeft: !selectedChatUserId ? '3px solid var(--accent-primary)' : '3px solid transparent', display: 'flex', alignItems: 'center', gap: '10px', fontSize: '0.85rem', transition: 'all 0.2s', position: 'relative' }}
             >
               <div style={{ width: '32px', height: '32px', borderRadius: '50%', background: 'rgba(255,255,255,0.05)', display: 'grid', placeItems: 'center' }}><User size={16} /></div>
               <span>Global Team</span>
+              {unreadCounts['global'] > 0 && (
+                 <div style={{ position: 'absolute', right: '12px', background: '#ef4444', color: 'white', borderRadius: '10px', padding: '2px 6px', fontSize: '0.65rem', fontWeight: 700 }}>{unreadCounts['global']}</div>
+              )}
             </div>
             
-            {allUsers.filter(u => u.id !== currentUser?.id).map(user => (
+            {(isAdmin 
+              ? allUsers.filter(u => u.id !== currentUser?.id)
+              : currentUser?.category === 'Client'
+                ? allUsers.filter(u => u.role === 'admin')
+                : allUsers.filter(u => u.id !== currentUser?.id && (u.role === 'admin' || u.category === currentUser?.category))
+            ).map(user => (
               <div 
                 key={user.id}
-                onClick={() => setSelectedChatUserId(user.id)}
-                style={{ padding: '12px 16px', cursor: 'pointer', background: selectedChatUserId === user.id ? 'rgba(59, 130, 246, 0.1)' : 'transparent', borderLeft: selectedChatUserId === user.id ? '3px solid var(--accent-primary)' : '3px solid transparent', display: 'flex', alignItems: 'center', gap: '10px', fontSize: '0.85rem', transition: 'all 0.2s' }}
+                onClick={() => {
+                  setSelectedChatUserId(user.id);
+                  setUnreadCounts(prev => ({ ...prev, [user.id]: 0 }));
+                }}
+                style={{ padding: '12px 16px', cursor: 'pointer', background: selectedChatUserId === user.id ? 'rgba(59, 130, 246, 0.1)' : 'transparent', borderLeft: selectedChatUserId === user.id ? '3px solid var(--accent-primary)' : '3px solid transparent', display: 'flex', alignItems: 'center', gap: '10px', fontSize: '0.85rem', transition: 'all 0.2s', position: 'relative' }}
               >
                 <div style={{ width: '32px', height: '32px', borderRadius: '50%', background: user.role === 'admin' ? 'rgba(139,92,246,0.1)' : 'rgba(59,130,246,0.1)', color: user.role === 'admin' ? '#a78bfa' : '#60a5fa', display: 'grid', placeItems: 'center', fontSize: '0.7rem', fontWeight: 700 }}>
                   {user.full_name.split(' ').map(n => n[0]).join('')}
                 </div>
                 <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{user.full_name}</div>
+                {unreadCounts[user.id] > 0 && (
+                   <div style={{ position: 'absolute', right: '12px', background: '#ef4444', color: 'white', borderRadius: '10px', padding: '2px 6px', fontSize: '0.65rem', fontWeight: 700 }}>{unreadCounts[user.id]}</div>
+                )}
               </div>
             ))}
           </div>
@@ -2351,7 +2490,14 @@ const App: React.FC = () => {
               {i === 2 && <div className="dock-separator" />}
               <div className={`dock-item${bouncingDock === app.type ? ' bouncing' : ''}`} onClick={() => openApp(app.type)}>
                 <div className="dock-tooltip">{app.label}</div>
-                <div className={`dock-icon ${app.cssClass}`}><app.icon size={26} /></div>
+                <div className={`dock-icon ${app.cssClass}`} style={{ position: 'relative' }}>
+                  <app.icon size={26} />
+                  {app.type === 'messenger' && Object.values(unreadCounts).reduce((a, b) => a + b, 0) > 0 && (
+                    <div style={{ position: 'absolute', top: '-5px', right: '-5px', background: '#ef4444', color: 'white', border: '2px solid #1a1a2e', borderRadius: '50%', width: '18px', height: '18px', fontSize: '10px', fontWeight: 700, display: 'grid', placeItems: 'center' }}>
+                      {Object.values(unreadCounts).reduce((a, b) => a + b, 0)}
+                    </div>
+                  )}
+                </div>
                 {isOpen && <div className="dock-indicator" />}
               </div>
             </React.Fragment>

@@ -66,6 +66,7 @@ CREATE TABLE IF NOT EXISTS public.app_users (
     full_name TEXT NOT NULL,
     email TEXT,
     role TEXT DEFAULT 'user' NOT NULL CHECK (role IN ('admin', 'user')),
+    category TEXT DEFAULT 'Staff' NOT NULL,
     is_active BOOLEAN DEFAULT true,
     last_login TIMESTAMP WITH TIME ZONE,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL,
