@@ -169,6 +169,7 @@ const App: React.FC = () => {
   const [uploadingTaskId, setUploadingTaskId] = useState<string | null>(null);
   const [allUsers, setAllUsers] = useState<AppUser[]>([]);
   const [isSystemBooting, setIsSystemBooting] = useState(true);
+  const [activeTaskToasts, setActiveTaskToasts] = useState<any[]>([]);
 
   // Appearance State
   const [theme, setTheme] = useState<'light' | 'dark'>(() => (localStorage.getItem('rt_theme') as any) || 'dark');
@@ -227,6 +228,24 @@ const App: React.FC = () => {
   const [unreadCounts, setUnreadCounts] = useState<Record<string, number>>({});
   const [isListening, setIsListening] = useState(false);
 
+  const playTaskChime = () => {
+    try {
+      const AudioContext = (window as any).AudioContext || (window as any).webkitAudioContext;
+      const ctx = new AudioContext();
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(880, ctx.currentTime);
+      osc.frequency.exponentialRampToValueAtTime(440, ctx.currentTime + 0.5);
+      gain.gain.setValueAtTime(0.1, ctx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.5);
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start();
+      osc.stop(ctx.currentTime + 0.5);
+    } catch(e) {}
+  };
+
   // --- STORAGE HELPERS ---
   const handleFileUpload = async (file: File, folder: string, taskId?: string) => {
     if (taskId) setUploadingTaskId(taskId);
@@ -275,6 +294,7 @@ const App: React.FC = () => {
   const openWindowsRef = useRef<OpenWindow[]>([]);
   const notifiedIdsRef = useRef(new Set<string>());
   const recognitionRef = useRef<any>(null);
+  const notifiedTasksRef = useRef<Set<string>>(new Set());
 
   useEffect(() => {
     selectedChatRef.current = selectedChatUserId;
@@ -305,6 +325,50 @@ const App: React.FC = () => {
     
     return () => clearInterval(t);
   }, []);
+
+  // --- SENTINEL TASK REMINDER SYSTEM ---
+  useEffect(() => {
+    if (!isLoggedIn || !currentUser) return;
+    
+    const checkDeadlines = () => {
+      const now = new Date().getTime();
+      const THRESHOLDS = {
+        DAY: 24 * 60 * 60 * 1000,
+        THIRTY_MIN: 30 * 60 * 1000
+      };
+
+      kanbanTasks.forEach(task => {
+        if (!task.dueAt || task.status === 'done' || task.status === 'archived') return;
+        if (task.assignedTo && task.assignedTo !== currentUser.id && !isAdmin) return;
+
+        const due = new Date(task.dueAt).getTime();
+        const diff = due - now;
+
+        // 1. One Day Threshold (Within 24h but more than 23h59m remaining)
+        if (diff > 0 && diff <= THRESHOLDS.DAY && !notifiedTasksRef.current.has(`${task.id}-day`)) {
+          notifiedTasksRef.current.add(`${task.id}-day`);
+          playTaskChime();
+          setUnreadCounts(u => ({ ...u, system: (u.system || 0) + 1 }));
+          setActiveTaskToasts(prev => [...prev, { id: `${task.id}-day`, title: task.title, type: 'Upcoming', message: 'Due in 24 hours' }]);
+        }
+
+        // 2. Thirty Minute Threshold
+        if (diff > 0 && diff <= THRESHOLDS.THIRTY_MIN && !notifiedTasksRef.current.has(`${task.id}-soon`)) {
+          notifiedTasksRef.current.add(`${task.id}-soon`);
+          playTaskChime();
+          // Double chime for urgency!
+          setTimeout(playTaskChime, 400); 
+          setUnreadCounts(u => ({ ...u, system: (u.system || 0) + 1 }));
+          setActiveTaskToasts(prev => [...prev, { id: `${task.id}-soon`, title: task.title, type: 'URGENT', message: 'Due in 30 minutes!' }]);
+        }
+      });
+    };
+
+    const interval = setInterval(checkDeadlines, 30000); // Check every 30s
+    checkDeadlines(); // Immediate check
+
+    return () => clearInterval(interval);
+  }, [isLoggedIn, currentUser, kanbanTasks, isAdmin]);
 
   // --- REAL-TIME DATABASE MESSENGER ---
   const fetchChatHistory = useCallback(async () => {
@@ -1560,6 +1624,39 @@ const App: React.FC = () => {
     </AnimatePresence>
   );
 
+  const renderTaskToasts = () => (
+    <div className="task-toast-container">
+      <AnimatePresence>
+        {activeTaskToasts.map(toast => (
+          <motion.div
+            key={toast.id}
+            initial={{ x: 350, opacity: 0 }}
+            animate={{ x: 0, opacity: 1 }}
+            exit={{ x: 350, opacity: 0 }}
+            className={`task-toast ${toast.type.toLowerCase()}`}
+            onAnimationComplete={() => {
+              setTimeout(() => {
+                setActiveTaskToasts(prev => prev.filter(t => t.id !== toast.id));
+              }, 6000);
+            }}
+          >
+            <div className="toast-icon">
+              {toast.type === 'URGENT' ? <AlertCircle size={20} /> : <Clock size={20} />}
+            </div>
+            <div className="toast-body">
+              <div className="toast-label">{toast.type}</div>
+              <h4 className="toast-title">{toast.title}</h4>
+              <p className="toast-msg">{toast.message}</p>
+            </div>
+            <button className="toast-close" onClick={() => setActiveTaskToasts(prev => prev.filter(t => t.id !== toast.id))}>
+              <Plus size={16} />
+            </button>
+          </motion.div>
+        ))}
+      </AnimatePresence>
+    </div>
+  );
+
   const renderArchive = (tasksInArchive?: KanbanTask[]) => {
     const archivedTasks = (tasksInArchive || kanbanTasks).filter(t => t.status === 'archived');
 
@@ -2688,6 +2785,7 @@ const App: React.FC = () => {
       <NovaRobot isVisible={isAdmin} />
       
       {renderTaskDetailModal()}
+      {renderTaskToasts()}
     </div>
   );
 };
